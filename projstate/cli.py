@@ -62,6 +62,25 @@ def cmd_log(root: Path, text: str) -> int:
     return 0
 
 
+def cmd_task(root: Path, name: str) -> int:
+    """设置 STATE.md 的 `# 当前任务：`（每次开窗口都能看到在做什么）。"""
+    from projstate.state.store import STATE_FILE, template
+
+    state = root / ".ai" / "STATE.md"
+    if not state.is_file():
+        state.parent.mkdir(parents=True, exist_ok=True)
+        state.write_text(template(), encoding="utf-8")
+    content = state.read_text(encoding="utf-8")
+    lines = content.splitlines(keepends=True)
+    for idx, ln in enumerate(lines):
+        if ln.startswith("# 当前任务"):
+            lines[idx] = f"# 当前任务：{name.strip()}\n"
+            break
+    state.write_text("".join(lines), encoding="utf-8")
+    print(f"[projstate] 当前任务已设为：{name.strip()}")
+    return 0
+
+
 def cmd_status(root: Path) -> int:
     print(read_state(root))
     return 0
@@ -76,6 +95,7 @@ def cmd_refresh(root: Path) -> int:
     track = _git_tracked(root)
     groups = group_candidates(list(map_data.keys()))
     findings = elect(groups, map_data, track)
+    findings = _apply_overrides(root, findings)
 
     # 生成物统计（仅报告，不自动改）
     generated = sorted({
@@ -104,6 +124,42 @@ def cmd_refresh(root: Path) -> int:
         agents.write_text(_replace_block(agents.read_text(encoding="utf-8"), block), encoding="utf-8")
     print(f"[projstate] refresh 完成：{len(files)} 候选，{len(findings)} 组旧版判定")
     return 0
+
+
+def _apply_overrides(root: Path, findings: list) -> list:
+    """把 canonical_overrides.json 里人为确认的现行版合并进判定结果。"""
+    overrides_file = root / ".ai" / "canonical_overrides.json"
+    if not overrides_file.is_file():
+        return findings
+    try:
+        overrides = json.loads(overrides_file.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return findings
+
+    from projstate.stale import StaleFinding
+    import re
+
+    result: list[StaleFinding] = []
+    for f in findings:
+        for stem, confirmed in overrides.items():
+            group = f.signals.get("group", [])
+            group_stems = [re.sub(r"\.(py|js|ts|tsx|jsx|mjs|cjs)$", "", g).lstrip("./") for g in group]
+            if stem in group_stems:
+                # 用人为确认的覆盖 canonical，其余为 superseded
+                others = [g for g in group if g != confirmed]
+                result.append(StaleFinding(
+                    group_key=f.group_key,
+                    canonical=confirmed,
+                    superseded=tuple(others),
+                    needs_review=(),
+                    ambiguous=(),
+                    signals={**f.signals, "overridden": True},
+                    suggestion="人工确认（resolve）",
+                ))
+                break
+        else:
+            result.append(f)
+    return result
 
 
 def cmd_check(root: Path) -> int:
@@ -149,6 +205,15 @@ def cmd_canonical(root: Path, name: str) -> int:
             if p and name in p:
                 print(f"现行版：{entry.get('canonical')}  已作废：{', '.join(entry.get('superseded', []))}")
                 return 0
+    # 命中 ambiguous 组：这是"有冲突但不确定"，不是"不存在"
+    for entry in entries:
+        amb = entry.get("ambiguous", [])
+        if amb and any(name in p for p in amb):
+            print(f"[projstate] 模块 {name} 存在版本冲突但当前无决定性证据，候选：")
+            for p in amb:
+                print(f"  {p}")
+            print(f"请用 `projstate resolve <候选>` 确认一次，将永久记住。")
+            return 2
     print(f"[projstate] 未找到与 {name} 匹配的现行版判定", file=sys.stderr)
     return 1
 
@@ -166,6 +231,39 @@ def cmd_why(root: Path, path: str) -> int:
             print(f"  组内：{', '.join(entry.get('signals',{}).get('group',[]))}")
             return 0
     print(f"[projstate] {rel} 无明显旧版判定", file=sys.stderr)
+    return 1
+
+
+def cmd_resolve(root: Path, path: str) -> int:
+    """人为确认某候选为现行版，写入 canonical_overrides.json，永久记住。"""
+    overrides_file = root / ".ai" / "canonical_overrides.json"
+    overrides_file.parent.mkdir(parents=True, exist_ok=True)
+    if overrides_file.is_file():
+        try:
+            overrides = json.loads(overrides_file.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            overrides = {}
+    else:
+        overrides = {}
+
+    sf = root / ".ai" / "stale.json"
+    if sf.is_file():
+        entries = json.loads(sf.read_text(encoding="utf-8"))
+        matched_group = None
+        for entry in entries:
+            amb = entry.get("ambiguous", [])
+            if path in amb:
+                matched_group = entry.get("signals", {}).get("group", [])
+                break
+        if matched_group:
+            # 用组内主干名作为 key
+            import re
+            stem = re.sub(r"\.(py|js|ts|tsx|jsx|mjs|cjs)$", "", path).lstrip("./")
+            overrides[stem] = path
+            _write_json(overrides_file, overrides)
+            print(f"[projstate] 已确认 {path} 为该组现行版，写入 {overrides_file}")
+            return 0
+    print(f"[projstate] {path} 不在任何待确认组中，无需 resolve", file=sys.stderr)
     return 1
 
 
@@ -243,16 +341,10 @@ def _read_task(root: Path) -> str:
             # 标题行本身为空，取标题后第一个非空、非小标题、非占位的内容
             for nxt in lines[i + 1:]:
                 s = nxt.strip()
-                if s and not s.startswith("##") and not s.startswith("-") and not s.startswith("*"):
+                if s and not s.startswith("##"):
                     return s
             break
-    # 回退：读"下一步"分组的首条 log（log 写入下一步分组），去掉日期前缀
-    for entry in _section_lines(lines, "下一步"):
-        s = entry.strip()
-        if s.startswith("- "):
-            return _strip_date_prefix(s[2:]) or "未记录"
-        if s and not s.startswith("##") and not s.startswith("*"):
-            return s
+    # 不读"下一步"分组：任务名与下一步是两回事，避免错位
     return "未记录"
 
 
@@ -295,12 +387,14 @@ def main(argv: list[str] | None = None) -> int:
     sub = parser.add_subparsers(dest="command")
     sub.add_parser("status")
     p_log = sub.add_parser("log"); p_log.add_argument("text")
+    p_task = sub.add_parser("task"); p_task.add_argument("name")
     sub.add_parser("refresh")
     sub.add_parser("check")
     sub.add_parser("selftest")
     p_ex = sub.add_parser("explain"); p_ex.add_argument("path")
     p_ca = sub.add_parser("canonical"); p_ca.add_argument("name")
     p_wy = sub.add_parser("why"); p_wy.add_argument("path")
+    p_re = sub.add_parser("resolve"); p_re.add_argument("path")
     sub.add_parser("init")
     sub.add_parser("archive")
     sub.add_parser("restore")
@@ -315,6 +409,8 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_status(root)
     if cmd == "log":
         return cmd_log(root, args.text)
+    if cmd == "task":
+        return cmd_task(root, args.name)
     if cmd == "refresh":
         return cmd_refresh(root)
     if cmd == "check":
@@ -325,6 +421,8 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_canonical(root, args.name)
     if cmd == "why":
         return cmd_why(root, args.path)
+    if cmd == "resolve":
+        return cmd_resolve(root, args.path)
     if cmd == "selftest":
         return cmd_selftest()
     if cmd == "init":

@@ -136,9 +136,12 @@ def build_map(root: Path, files: list[Path]) -> dict:
 
 
 def find_unresolved(root: Path, files: list[Path]) -> dict:
-    """收集"项目内相对引用（以 `.` 开头）但解析不到目标"的清单。
+    """收集"项目内引用但解析不到目标"的清单。
 
-    相对引用 resolve 不到 = 异常信号，须落盘（见 spec 9 节）；裸包名才视为外部依赖。
+    - 相对导入（以 `.` 开头）resolve 不到 = 异常信号，一律记录（见 spec 9 节）。
+    - 绝对模块路径（如 `core.config`）若其第一段与项目内某顶层目录/模块前缀匹配
+      （说明它想引用项目内），而 resolve 不到 = 异常，记录；否则视为第三方依赖，跳过。
+    - 裸名（`os` / `requests`）视为外部依赖，不记。
     """
     module_index: dict[str, list[str]] = {}
     for path in files:
@@ -146,6 +149,12 @@ def find_unresolved(root: Path, files: list[Path]) -> dict:
         module_index.setdefault(_module_stem(rel), []).append(rel)
 
     resolver = _build_resolver(root, module_index)
+    # 项目内顶层"命名空间"：目录名 + 文件名主干，用于判断绝对导入是否指向项目内
+    top_level = set()
+    for rel in module_index:
+        head = rel.split("/")[0]
+        top_level.add(head)
+
     unresolved: dict[str, list[str]] = {}
     for path in files:
         rel = rel_posix(root, path)
@@ -155,9 +164,15 @@ def find_unresolved(root: Path, files: list[Path]) -> dict:
             continue
         lang = detect_language(rel)
         for imp in extract_imports(source, lang):
-            # 只关心项目内相对引用；绝对包名/裸名不在此列
-            if not imp.startswith("."):
+            if imp.startswith("."):
+                target = resolver.resolve(imp, rel)
+                if target is None:
+                    unresolved.setdefault(rel, []).append(imp)
                 continue
+            # 绝对模块路径：第一段是项目内的目录/模块名，才视为"想引用项目内"
+            head = imp.replace(".", "/").split("/")[0]
+            if head not in top_level:
+                continue  # 第三方 / 裸名
             target = resolver.resolve(imp, rel)
             if target is None:
                 unresolved.setdefault(rel, []).append(imp)

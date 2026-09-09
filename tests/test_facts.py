@@ -62,3 +62,20 @@ def test_find_unresolved_records_broken_relative_import(tmp_path: Path):
     unresolved = find_unresolved(tmp_path, [tmp_path / "src" / "a.py", tmp_path / "src" / "b.py"])
     assert "src/a.py" in unresolved
     assert unresolved["src/a.py"] == [".missing"]
+
+
+def test_find_unresolved_records_absolute_project_import_missing(tmp_path: Path):
+    """缺陷5：`from core.config import CFG` 而 core/config.py 不存在时，应记入 unresolved。"""
+    (tmp_path / "core").mkdir()
+    (tmp_path / "core" / "mod.py").write_text("from core.config import CFG\n", encoding="utf-8")
+    unresolved = find_unresolved(tmp_path, [tmp_path / "core" / "mod.py"])
+    assert "core/mod.py" in unresolved
+    assert "core.config" in unresolved["core/mod.py"]
+
+
+def test_find_unresolved_ignores_third_party_absolute(tmp_path: Path):
+    """裸包名 / 第三方（如 requests / os）不记为未解析。"""
+    (tmp_path / "app").mkdir()
+    (tmp_path / "app" / "mod.py").write_text("import os\nimport requests\n", encoding="utf-8")
+    unresolved = find_unresolved(tmp_path, [tmp_path / "app" / "mod.py"])
+    assert unresolved == {}

@@ -30,10 +30,17 @@ def render_map(map_data: dict, findings: list, site: dict) -> str:
             lines.append(f"  {r}  ·  被 {map_data[r].get('ref_count',0)} 个文件引用")
         lines.append(f"")
 
-    if findings:
+    decided = [f for f in findings if f.canonical is not None]
+    ambiguous = [f for f in findings if f.canonical is None]
+    if decided:
         lines.append(f"现行版对照（推断）")
-        for f in findings:
+        for f in decided:
             lines.append(f"  {f.canonical}  ← 现行版；已作废：{', '.join(f.superseded) if f.superseded else '无'}")
+        lines.append(f"")
+    if ambiguous:
+        lines.append(f"需人工确认（无决定性证据）")
+        for f in ambiguous:
+            lines.append(f"  {', '.join(f.ambiguous)}")
         lines.append(f"")
 
     lines.append(f"改任何文件前：`projstate explain <path>`")
@@ -46,19 +53,27 @@ def render_hip(findings: list, generated: list[str]) -> str:
     lines: list[str] = []
     lines.append(f"# 项目卫生（勿读 / 现行版对照）")
     lines.append(f"")
-    if findings:
+    decided = [f for f in findings if f.canonical is not None]
+    ambiguous = [f for f in findings if f.canonical is None]
+    if decided:
         lines.append(f"现行版对照（推断）")
-        for f in findings:
-            names = "，".join(f.superseded) if f.superseded else "（需人工确认）"
+        for f in decided:
+            names = "，".join(f.superseded) if f.superseded else "无"
             lines.append(f"  {f.canonical}  ← 当前    {names}")
+        lines.append(f"")
+    if ambiguous:
+        lines.append(f"需人工确认（工具无决定性证据，不猜）")
+        for f in ambiguous:
+            lines.append(f"  候选：{', '.join(f.ambiguous)}")
+        lines.append(f"  处理：`projstate resolve <候选>  # 确认一次，永久记住`")
         lines.append(f"")
     if generated:
         lines.append(f"生成物（勿读，可从源码重建）")
         for g in generated:
             lines.append(f"  {g}")
         lines.append(f"")
-    lines.append(f"> 这是**确定性的保守判定**，非全知。仅当有可验证证据（如被引用）时才标现行版；")
-    lines.append(f"> 无决定性证据的组会标 ambiguous 而非乱猜。漏报的旧版本仍需人确认。")
+    if not findings:
+        lines.append(f"无旧版判定。")
     return "\n".join(lines) + "\n"
 
 

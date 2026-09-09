@@ -1,4 +1,5 @@
 from projstate.render import render_agents_block, render_hip, render_map
+from projstate.stale import StaleFinding
 
 
 def test_render_map_lists_entries_and_refs():
@@ -30,3 +31,44 @@ def test_render_agents_block_small():
     assert "<!-- projstate:begin" in out
     assert "导出重构" in out
     assert "<!-- projstate:end" in out
+
+
+def test_render_hip_no_none_and_lists_ambiguous():
+    """缺陷1/2：ambiguous 组不得打印 None，且须列出候选文件。"""
+    findings = [
+        StaleFinding(
+            group_key=("svc",),
+            canonical=None,
+            ambiguous=("svc/feature_0.py", "svc/feature_0_old.py", "svc/feature_0_v2.py"),
+            signals={"group": ("svc/feature_0.py", "svc/feature_0_old.py", "svc/feature_0_v2.py")},
+            suggestion="需人工确认",
+        ),
+        StaleFinding(
+            group_key=("app",),
+            canonical="app/auth.py",
+            superseded=("app/auth_old.py",),
+            signals={"group": ("app/auth.py", "app/auth_old.py")},
+            suggestion="建议归档",
+        ),
+    ]
+    out = render_hip(findings, [])
+    assert "None" not in out
+    assert "svc/feature_0_v2.py" in out
+    assert "svc/feature_0.py" in out
+    assert "需人工确认" in out
+    assert "app/auth.py" in out
+
+
+def test_render_map_marks_ambiguous_group():
+    findings = [
+        StaleFinding(
+            group_key=("svc",),
+            canonical=None,
+            ambiguous=("svc/feature_0.py", "svc/feature_0_v2.py"),
+            signals={},
+            suggestion="需人工确认",
+        )
+    ]
+    out = render_map({}, findings, {"name": "x", "fingerprint": "f", "count": 2})
+    assert "需人工确认" in out
+    assert "svc/feature_0_v2.py" in out
