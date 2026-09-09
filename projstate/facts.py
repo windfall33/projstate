@@ -73,6 +73,7 @@ def build_map(root: Path, files: list[Path]) -> dict:
             "imports": list(imports),
             "ref_count": 0,
             "reachable": entry_points(root, rel, lang),
+            "mtime": int(path.stat().st_mtime),
         }
         for imp in imports:
             if imp.startswith("."):  # 项目内相对引用
