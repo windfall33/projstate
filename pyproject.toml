@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "projstate"
+version = "0.1.0"
+description = "项目状态与阅读锚点：零依赖落盘的项目记忆，跨窗口/跨 agent 共享"
+requires-python = ">=3.10"
+dependencies = []
+
+[project.optional-dependencies]
+test = ["pytest>=8.0"]
+
+[project.scripts]
+projstate = "projstate.cli:main"
+
+[tool.setuptools]
+packages = ["projstate", "projstate.state"]
