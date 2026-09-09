@@ -24,6 +24,8 @@
 | `projstate explain <path>` | 该文件被谁引用、改它要连带读什么 |
 | `projstate canonical <名>` | 该概念现行版是哪个 |
 | `projstate why <path>` | 为什么判它陈旧 |
+| `projstate resolve <候选>` | 人为确认某候选为现行版，写入 `.ai/canonical_overrides.json`，永久生效 |
+| `projstate task <名>` | 设置 `STATE.md` 的当前任务（与 log 的下一步分开） |
 
 ## 已知限制
 
@@ -35,6 +37,9 @@
   无法仅凭文件名区分。只有 `_old`/`_backup`/`-旧`/`副本`/`(1)` 等**方向确定**的旧版标记才作决定性证据。
 - **对未提供引用链的仓库，地图可能只有标 ambiguous 的组，无法给出"哪个是现行版"的确定答案。**
   这时工具的价值在于"不误导"，而非"给出答案"；要拿到确定答案需要仓库有真实 import/引用关系。
+- **`projstate resolve <候选>` 是突破口**：对无引用证据的 ambiguous 组，人/agent 确认一次后写入
+  `canonical_overrides.json`，后续所有窗口/agent 直接读到确定判定，不再重复面对同一个不确定判断。
+  这正对应"昂贵的判断要跨窗口持久化"，避免每个新窗口重新猜测（痛点二的漂移来源）。
 - "职责描述"为机械推断，标 `（推断）`；引用计数/入口/git 为 `（确证）`。
 - 同一会话内地图会旧，直到下次 refresh。
 - 状态层靠人/agent 自律维护；工具不替用户判断"做完了没"。
