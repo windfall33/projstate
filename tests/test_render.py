@@ -72,3 +72,22 @@ def test_render_map_marks_ambiguous_group():
     out = render_map({}, findings, {"name": "x", "fingerprint": "f", "count": 2})
     assert "需人工确认" in out
     assert "svc/feature_0_v2.py" in out
+
+
+def test_render_hip_aggregates_many_ambiguous():
+    """产物膨胀：超过阈值时聚合为统计+摘要，而非逐行列全部候选。"""
+    findings = [
+        StaleFinding(
+            group_key=(f"g{i}",),
+            canonical=None,
+            ambiguous=(f"src/g{i}.py", f"src/g{i}_v2.py"),
+            signals={},
+            suggestion="需人工确认",
+        )
+        for i in range(25)
+    ]
+    out = render_hip(findings, [])
+    assert "共 25 组需人工确认" in out
+    assert "完整清单见" in out and "stale.json" in out
+    # 不应列全部 25 组
+    assert out.count("候选：") < 25

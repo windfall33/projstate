@@ -5,6 +5,9 @@ from __future__ import annotations
 BEGIN_MARKER = "<!-- projstate:begin 自动生成，勿手改 -->"
 END_MARKER = "<!-- projstate:end -->"
 
+# ambiguous 组超过此阈值时，产物不逐行列全部候选（避免退化成"我不知道"清单），改为聚合。
+AMBIGUOUS_DETAIL_LIMIT = 20
+
 
 def render_map(map_data: dict, findings: list, site: dict) -> str:
     """事实层完整版：入口引用计数 + 阅读锚点 + 现行版对照。"""
@@ -39,8 +42,14 @@ def render_map(map_data: dict, findings: list, site: dict) -> str:
         lines.append(f"")
     if ambiguous:
         lines.append(f"需人工确认（无决定性证据）")
-        for f in ambiguous:
-            lines.append(f"  {', '.join(f.ambiguous)}")
+        if len(ambiguous) <= AMBIGUOUS_DETAIL_LIMIT:
+            for f in ambiguous:
+                lines.append(f"  {', '.join(f.ambiguous)}")
+        else:
+            lines.append(f"  {len(ambiguous)} 组需人工确认，仅列出前 {AMBIGUOUS_DETAIL_LIMIT} 组：")
+            for f in ambiguous[:AMBIGUOUS_DETAIL_LIMIT]:
+                lines.append(f"    {', '.join(f.ambiguous)}")
+            lines.append(f"  完整清单见 `.ai/stale.json`")
         lines.append(f"")
 
     lines.append(f"改任何文件前：`projstate explain <path>`")
@@ -63,9 +72,15 @@ def render_hip(findings: list, generated: list[str]) -> str:
         lines.append(f"")
     if ambiguous:
         lines.append(f"需人工确认（工具无决定性证据，不猜）")
-        for f in ambiguous:
-            lines.append(f"  候选：{', '.join(f.ambiguous)}")
-        lines.append(f"  处理：`projstate resolve <候选>  # 确认一次，永久记住`")
+        if len(ambiguous) <= AMBIGUOUS_DETAIL_LIMIT:
+            for f in ambiguous:
+                lines.append(f"  候选：{', '.join(f.ambiguous)}")
+            lines.append(f"  处理：`projstate resolve <候选>  # 确认一次，永久记住`")
+        else:
+            lines.append(f"  共 {len(ambiguous)} 组需人工确认，仅列出前 {AMBIGUOUS_DETAIL_LIMIT} 组：")
+            for f in ambiguous[:AMBIGUOUS_DETAIL_LIMIT]:
+                lines.append(f"    候选：{', '.join(f.ambiguous)}")
+            lines.append(f"  完整清单见 `.ai/stale.json`；每组建议用 `projstate resolve <候选>` 确认一次。")
         lines.append(f"")
     if generated:
         lines.append(f"生成物（勿读，可从源码重建）")

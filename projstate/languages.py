@@ -27,19 +27,32 @@ GENERATED_EXTS: frozenset[str] = frozenset(
     {".asar", ".pak", ".pyc", ".dll", ".exe", ".so", ".bin", ".min.js"}
 )
 
-# 明确旧版标记：方向确定（旧/备份/归档等），可作现行版选举的决定性信号。
-# 例：export_old.py / export_backup.py / settle-旧.py / import (1).py / legacy_migrate.py
+# 明确的旧版语义词：方向确定，可作现行版选举的决定性信号。
+_OLD_WORDS = "old|backup|bak|legacy|deprecated|archive|original"
+# 疑似版本语义词：方向不确定，不作决定性信号。
+_AMBIG_WORDS = "v\\d+|new|next|final|latest|newest|refactor|rebuilt|copy|temp|tmp|test"
+
+# 明确旧版标记：方向确定。例：export_old.py / export_backup.py / settle-旧.py / a_original.py
 OLD_NAME_MARKER = re.compile(
-    r"(?:^|[_-])(?:old|backup|bak|legacy|deprecated|archive)(?:[._-]|$)"
+    rf"(?:^|[_-])(?:{_OLD_WORDS})(?:[._-]|$)"
     r"|(?:-旧|-副本|\(1\)| 2|\.old|\.bak)$",
     re.IGNORECASE,
 )
 
-# 疑似版本标记：方向不确定（v2 可能是现行版，也可能是历史残留）。**不作决定性信号**。
-# 例：export_v2.py / export_new.py / export_final.py / export_latest.py
+# 疑似版本标记：方向不确定。例：export_v2.py / export_new.py / export_final.py / a_next.py
 AMBIG_VERSION_MARKER = re.compile(
-    r"(?:^|[_-])(?:v\d+|new|final|latest|copy|temp|tmp)(?:[._-]|$)"
+    rf"(?:^|[_-])(?:{_AMBIG_WORDS})(?:[._-]|$)"
     r"|(?:\.new|\.copy\.|\.tmp)$",
+    re.IGNORECASE,
+)
+
+# 归组用：去掉一切版本/旧版/副本/年份后缀标记，得到主干名。
+# 覆盖明确旧版 + 疑似版本 + 中文副本 + 年份后缀（2026 等）。不含裸数字（feature_0 非版本）。
+VERSION_STEM_MARKER = re.compile(
+    rf"(?:[._-](?:{_OLD_WORDS}|{_AMBIG_WORDS})(?:\.|_|$))"
+    r"|[._-](?:旧|副本)|-\s*(?:旧|副本)"
+    r"|(?:[._-](?:19|20)\d{2}$)"
+    r"|\(\d+\)$",
     re.IGNORECASE,
 )
 

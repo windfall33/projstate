@@ -24,6 +24,26 @@ def test_normalize_stem_keeps_api_v2_when_no_v1():
     assert normalize_stem("api_v2.js") == "api"
 
 
+def test_normalize_stem_covers_new_final_latest_and_chinese():
+    """归组层词表必须覆盖 P0 清单中的常见版本标记，否则永远进不了判定。"""
+    for name in (
+        "a_new.py", "a_final.py", "a_latest.py", "a_next.py", "a_refactor.py",
+        "a_rebuilt.py", "a_2026.py", "a_newest.py", "a_deprecated.py", "a_tmp.py",
+        "a_original.py", "a_副本.py", "a-旧.py", "a_v2.py", "a_old.py",
+    ):
+        assert normalize_stem(name) == "a", f"{name} 未归到主干 a"
+    # 词边界：normalize 不误命中
+    assert normalize_stem("finalize.py") == "finalize"
+    assert normalize_stem("newly.py") == "newly"
+
+
+def test_group_candidates_groups_new_and_final_suffix():
+    """shipping.py + shipping_new.py 必须归组，否则 ref_count 再准也用不上。"""
+    groups = group_candidates(["src/report.py", "src/report_final.py"])
+    assert len(groups) == 1
+    assert len(groups[0]) == 2
+
+
 def test_elect_marks_ambiguous_when_no_decisive_signal():
     """场景 H：当前版 vs 旧版，全部信号平局时不可乱判，须标 ambiguous。"""
     from projstate.stale import elect

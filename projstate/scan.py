@@ -33,7 +33,12 @@ def _ignored(rel: str, ignore: tuple[str, ...]) -> bool:
 
 
 def iter_files(root: Path, ignore: tuple[str, ...] = ()) -> Iterator[Path]:
-    """深度优先遍历 root，跳过生成目录/归档目录/忽略模式，产出文件 Path。"""
+    """深度优先遍历 root，跳过生成目录/归档目录/规则文件/忽略模式，产出文件 Path。
+
+    排除根级 agent 规则文件（AGENTS.md / CLAUDE.md / GEMINI.md）——它们是工具会改写的入口，
+    不是项目源码事实，不应进入 map.json，否则改写其 mtime 会造成无意义的自指 diff。
+    """
+    rule_files = {"AGENTS.md", "CLAUDE.md", "GEMINI.md"}
     stack: list[Path] = [root]
     while stack:
         current = stack.pop()
@@ -48,6 +53,6 @@ def iter_files(root: Path, ignore: tuple[str, ...] = ()) -> Iterator[Path]:
                     continue
                 stack.append(entry)
             else:
-                if is_generated(rel) or is_archive(rel) or _ignored(rel, ignore):
+                if entry.name in rule_files or is_generated(rel) or is_archive(rel) or _ignored(rel, ignore):
                     continue
                 yield entry

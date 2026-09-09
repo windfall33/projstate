@@ -5,12 +5,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 
-from projstate.languages import has_old_marker
-
-_MARKERS = re.compile(
-    r"(?:[._-](?:v\d+|old|backup|copy|bak))|(?:-旧|-副本| 2|\(1\)|\.final)",
-    re.IGNORECASE,
-)
+from projstate.languages import VERSION_STEM_MARKER, has_old_marker
 
 
 @dataclass(frozen=True)
@@ -27,7 +22,7 @@ class StaleFinding:
 def normalize_stem(name: str) -> str:
     """去掉文件名中的版本/旧版标记。用词边界，finalize 不命中 final。"""
     stem = name.rsplit(".", 1)[0]
-    return _MARKERS.sub("", stem).strip("_- ")
+    return VERSION_STEM_MARKER.sub("", stem).strip("_- ")
 
 
 def group_candidates(paths: list[str]) -> list[list[str]]:
