@@ -22,3 +22,31 @@ def test_group_candidates_keeps_distinct_separate():
 
 def test_normalize_stem_keeps_api_v2_when_no_v1():
     assert normalize_stem("api_v2.js") == "api"
+
+
+def test_elect_marks_ambiguous_when_no_decisive_signal():
+    """场景 H：当前版 vs 旧版，全部信号平局时不可乱判，须标 ambiguous。"""
+    from projstate.stale import elect
+
+    facts = {
+        "app/importer.py": {"ref_count": 0, "reachable": False, "mtime": 100, "language": "python"},
+        "app/importer 2.py": {"ref_count": 0, "reachable": False, "mtime": 100, "language": "python"},
+    }
+    findings = elect([["app/importer.py", "app/importer 2.py"]], facts, set())
+    assert len(findings) == 1
+    assert findings[0].canonical is None
+    assert findings[0].ambiguous == ("app/importer.py", "app/importer 2.py")
+
+
+def test_elect_prefers_referenced_over_unreferenced():
+    """场景 B：被真实引用的文件应胜出，即使它名字带 v2 标记。"""
+    from projstate.stale import elect
+
+    facts = {
+        "app/payment_v2.py": {"ref_count": 1, "reachable": False, "mtime": 6000, "language": "python"},
+        "app/payment.py": {"ref_count": 0, "reachable": False, "mtime": 2000, "language": "python"},
+    }
+    findings = elect([["app/payment_v2.py", "app/payment.py"]], facts, set())
+    assert len(findings) == 1
+    assert findings[0].canonical == "app/payment_v2.py"
+    assert findings[0].superseded == ("app/payment.py",)

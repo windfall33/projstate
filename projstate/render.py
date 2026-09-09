@@ -31,7 +31,7 @@ def render_map(map_data: dict, findings: list, site: dict) -> str:
         lines.append(f"")
 
     if findings:
-        lines.append(f"现行版对照（确证）")
+        lines.append(f"现行版对照（推断）")
         for f in findings:
             lines.append(f"  {f.canonical}  ← 现行版；已作废：{', '.join(f.superseded) if f.superseded else '无'}")
         lines.append(f"")
@@ -47,7 +47,7 @@ def render_hip(findings: list, generated: list[str]) -> str:
     lines.append(f"# 项目卫生（勿读 / 现行版对照）")
     lines.append(f"")
     if findings:
-        lines.append(f"现行版对照（确证）")
+        lines.append(f"现行版对照（推断）")
         for f in findings:
             names = "，".join(f.superseded) if f.superseded else "（需人工确认）"
             lines.append(f"  {f.canonical}  ← 当前    {names}")
@@ -57,7 +57,8 @@ def render_hip(findings: list, generated: list[str]) -> str:
         for g in generated:
             lines.append(f"  {g}")
         lines.append(f"")
-    lines.append(f"> 勿读清单仅为确定性的保守判定；漏报的旧版本只能靠人确认。")
+    lines.append(f"> 这是**确定性的保守判定**，非全知。仅当有可验证证据（如被引用）时才标现行版；")
+    lines.append(f"> 无决定性证据的组会标 ambiguous 而非乱猜。漏报的旧版本仍需人确认。")
     return "\n".join(lines) + "\n"
 
 
