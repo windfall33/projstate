@@ -29,7 +29,9 @@ GENERATED_EXTS: frozenset[str] = frozenset(
 
 # 文件名版本标记（谨慎使用，作现行版选举的第 4 级信号）。
 NAME_VERSION_PATTERN = re.compile(
-    r"(?:^|[_-])(?:v\d+|old|backup|copy|bak)(?:[._-]|$)|(?:-旧|-副本| 2|\(1\)|\.final)$",
+    r"(?:^|[_-])(?:v\d+|old|new|final|latest|backup|copy|bak|deprecated|temp|tmp)(?:[._-]|$)"
+    r"|(?:-旧|-副本| 2|\(1\)|\.final|\.old|\.new|\.bak)$"
+    r"|(?<![a-zA-Z])\d{1,3}$",
     re.IGNORECASE,
 )
 
@@ -71,4 +73,8 @@ def is_archive(rel: str) -> bool:
 def has_name_version_marker(rel: str) -> bool:
     """文件名是否含版本/旧版标记（用于现行版选举的弱信号）。"""
     name = _parts(rel)[-1]
-    return bool(NAME_VERSION_PATTERN.search(name))
+    # 备份类后缀（.bak/.old/.new/.copy）本身就是标记，不剥掉
+    if name.lower().endswith((".bak", ".old", ".new", ".copy", ".tmp")):
+        return True
+    stem = name.rsplit(".", 1)[0]  # 其他情况剥普通扩展名，避免 .py 挡住数字后缀
+    return bool(NAME_VERSION_PATTERN.search(stem))

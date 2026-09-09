@@ -176,6 +176,31 @@ def cmd_selftest() -> int:
     return 0
 
 
+def cmd_init(root: Path) -> int:
+    """接入当前项目：建 .ai/、初始化 STATE.md、把标记块写入 AGENTS.md。"""
+    from projstate.state.store import STATE_FILE, template
+
+    ai = root / ".ai"
+    ai.mkdir(parents=True, exist_ok=True)
+    state = ai / STATE_FILE.replace(".ai/", "")
+    if not state.is_file():
+        state.write_text(template(), encoding="utf-8")
+        print(f"[projstate] 已创建 {state}")
+    agents = root / "AGENTS.md"
+    if not agents.is_file():
+        # 不擅自创建 AGENTS.md（尊重用户入口文件体系），提示即可
+        print("[projstate] 未发现 AGENTS.md，未接入。请创建 AGENTS.md 后重跑 init")
+        return 0
+    block = render_agents_block({
+        "task": _read_task(root),
+        "next": _read_next(root),
+        "count": 0,
+    })
+    agents.write_text(_replace_block(agents.read_text(encoding="utf-8"), block), encoding="utf-8")
+    print(f"[projstate] 已将标记块写入 {agents}")
+    return 0
+
+
 def _top_dirs(root: Path) -> list[Path]:
     """返回根下的顶层目录（用于生成物报告）。"""
     try:
@@ -218,20 +243,49 @@ def _read_task(root: Path) -> str:
                 s = nxt.strip()
                 if s and not s.startswith("##") and not s.startswith("-") and not s.startswith("*"):
                     return s
-            return "未记录"
+            break
+    # 回退：读"下一步"分组的首条 log（log 写入下一步分组），去掉日期前缀
+    for entry in _section_lines(lines, "下一步"):
+        s = entry.strip()
+        if s.startswith("- "):
+            return _strip_date_prefix(s[2:]) or "未记录"
+        if s and not s.startswith("##") and not s.startswith("*"):
+            return s
     return "未记录"
 
 
 def _read_next(root: Path) -> str:
     lines = read_state(root).splitlines()
-    for i, line in enumerate(lines):
-        if line.strip() == "## 下一步":
-            for nxt in lines[i + 1:]:
-                s = nxt.strip()
-                if s and not s.startswith("##") and not s.startswith("-") and not s.startswith("*"):
-                    return s
-            return "见 .ai/STATE.md"
+    for entry in _section_lines(lines, "下一步"):
+        s = entry.strip()
+        if s.startswith("- "):
+            return _strip_date_prefix(s[2:]) or "见 .ai/STATE.md"
+        if s and not s.startswith("##") and not s.startswith("*"):
+            return s
     return "见 .ai/STATE.md"
+
+
+def _section_lines(lines: list[str], section: str) -> list[str]:
+    """返回某个 `## <section>` 分组下的内容行（不含其它小标题）。"""
+    result: list[str] = []
+    capture = False
+    for ln in lines:
+        stripped = ln.strip()
+        if stripped == f"## {section}":
+            capture = True
+            continue
+        if capture and stripped.startswith("##"):
+            break
+        if capture:
+            result.append(ln)
+    return result
+
+
+def _strip_date_prefix(text: str) -> str:
+    """去掉 log 行开头的 `YYYY-MM-DD ` 前缀。"""
+    import re
+
+    return re.sub(r"^\d{4}-\d{2}-\d{2}\s*", "", text).strip()
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -272,8 +326,7 @@ def main(argv: list[str] | None = None) -> int:
     if cmd == "selftest":
         return cmd_selftest()
     if cmd == "init":
-        print("[projstate] init 将接入当前项目（写 AGENTS.md 标记块，需确认）——v1 请先手动确认后启用")
-        return 0
+        return cmd_init(root)
     if cmd in ("archive", "restore"):
         print("[projstate] archive/restore 需二次确认，v1 预留", file=sys.stderr)
         return 1

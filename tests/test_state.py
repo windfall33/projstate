@@ -24,3 +24,14 @@ def test_append_has_timestamp(tmp_path: Path):
 
 def test_read_state_returns_template_when_missing(tmp_path: Path):
     assert "当前任务" in read_state(tmp_path)
+
+
+def test_append_writes_under_next_section_not_end(tmp_path: Path):
+    """log 应落在"下一步"分组下，而不是文件末尾——否则换窗口读不到。"""
+    append_state(tmp_path, "完成导出重构")
+    content = (tmp_path / ".ai" / "STATE.md").read_text(encoding="utf-8")
+    # 日志应出现在 "## 下一步" 之后，而不是 "## 卡点" 之后（末尾）
+    next_idx = content.index("## 下一步")
+    card_idx = content.index("## 卡点")
+    log_idx = content.index("完成导出重构")
+    assert next_idx < log_idx < card_idx

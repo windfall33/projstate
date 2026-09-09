@@ -1,6 +1,7 @@
 from pathlib import Path
 
 from projstate.languages import detect_language, is_archive, is_generated
+from projstate.languages import has_name_version_marker
 from projstate.scan import iter_files, rel_posix
 
 
@@ -39,3 +40,17 @@ def test_iter_files_skips_generated_and_ignore(tmp_path: Path):
 def test_rel_posix_uses_forward_slashes(tmp_path: Path):
     p = tmp_path / "a" / "b.js"
     assert rel_posix(tmp_path, p) == "a/b.js"
+
+
+def test_name_version_marker_covers_common_patterns():
+    assert has_name_version_marker("src/a_v2.js") is True
+    assert has_name_version_marker("src/a_new.py") is True
+    assert has_name_version_marker("src/a_final.js") is True
+    assert has_name_version_marker("src/a_latest.js") is True
+    assert has_name_version_marker("src/a_2.py") is True  # 带下划线的纯数字后缀
+    assert has_name_version_marker("src/a.bak") is True
+    # 词边界：不应误命中
+    assert has_name_version_marker("src/finalize.js") is False
+    assert has_name_version_marker("src/newly.js") is False
+    assert has_name_version_marker("src/a.py") is False
+    assert has_name_version_marker("src/a2.py") is False  # 纯字母相邻数字不算
