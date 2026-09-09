@@ -47,10 +47,11 @@ def test_name_version_marker_covers_common_patterns():
     assert has_name_version_marker("src/a_new.py") is True
     assert has_name_version_marker("src/a_final.js") is True
     assert has_name_version_marker("src/a_latest.js") is True
-    assert has_name_version_marker("src/a_2.py") is True  # 带下划线的纯数字后缀
     assert has_name_version_marker("src/a.bak") is True
     # 词边界：不应误命中
     assert has_name_version_marker("src/finalize.js") is False
     assert has_name_version_marker("src/newly.js") is False
     assert has_name_version_marker("src/a.py") is False
-    assert has_name_version_marker("src/a2.py") is False  # 纯字母相邻数字不算
+    # 裸数字编号（feature_0 / a_2）不是版本标记——命名编号误报会污染判定
+    assert has_name_version_marker("src/feature_0.py") is False
+    assert has_name_version_marker("src/a_2.py") is False

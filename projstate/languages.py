@@ -27,11 +27,19 @@ GENERATED_EXTS: frozenset[str] = frozenset(
     {".asar", ".pak", ".pyc", ".dll", ".exe", ".so", ".bin", ".min.js"}
 )
 
-# 文件名版本标记（谨慎使用，作现行版选举的第 4 级信号）。
-NAME_VERSION_PATTERN = re.compile(
-    r"(?:^|[_-])(?:v\d+|old|new|final|latest|backup|copy|bak|deprecated|temp|tmp)(?:[._-]|$)"
-    r"|(?:-旧|-副本| 2|\(1\)|\.final|\.old|\.new|\.bak)$"
-    r"|(?<![a-zA-Z])\d{1,3}$",
+# 明确旧版标记：方向确定（旧/备份/归档等），可作现行版选举的决定性信号。
+# 例：export_old.py / export_backup.py / settle-旧.py / import (1).py / legacy_migrate.py
+OLD_NAME_MARKER = re.compile(
+    r"(?:^|[_-])(?:old|backup|bak|legacy|deprecated|archive)(?:[._-]|$)"
+    r"|(?:-旧|-副本|\(1\)| 2|\.old|\.bak)$",
+    re.IGNORECASE,
+)
+
+# 疑似版本标记：方向不确定（v2 可能是现行版，也可能是历史残留）。**不作决定性信号**。
+# 例：export_v2.py / export_new.py / export_final.py / export_latest.py
+AMBIG_VERSION_MARKER = re.compile(
+    r"(?:^|[_-])(?:v\d+|new|final|latest|copy|temp|tmp)(?:[._-]|$)"
+    r"|(?:\.new|\.copy\.|\.tmp)$",
     re.IGNORECASE,
 )
 
@@ -71,10 +79,21 @@ def is_archive(rel: str) -> bool:
 
 
 def has_name_version_marker(rel: str) -> bool:
-    """文件名是否含版本/旧版标记（用于现行版选举的弱信号）。"""
+    """文件名是否含任何版本/旧版标记（弱信号，不作为决定性依据）。"""
     name = _parts(rel)[-1]
-    # 备份类后缀（.bak/.old/.new/.copy）本身就是标记，不剥掉
     if name.lower().endswith((".bak", ".old", ".new", ".copy", ".tmp")):
         return True
     stem = name.rsplit(".", 1)[0]  # 其他情况剥普通扩展名，避免 .py 挡住数字后缀
-    return bool(NAME_VERSION_PATTERN.search(stem))
+    return bool(OLD_NAME_MARKER.search(stem) or AMBIG_VERSION_MARKER.search(stem))
+
+
+def has_old_marker(rel: str) -> bool:
+    """文件名是否含**明确旧版**标记（old/backup/legacy/-旧/副本/(1) 等）。
+
+    方向确定：这类命名声明自己是旧版，可作现行版选举的决定性证据。
+    """
+    name = _parts(rel)[-1]
+    if name.lower().endswith((".bak", ".old")):
+        return True
+    stem = name.rsplit(".", 1)[0]
+    return bool(OLD_NAME_MARKER.search(stem))

@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 
-from projstate.languages import has_name_version_marker
+from projstate.languages import has_old_marker
 
 _MARKERS = re.compile(
     r"(?:[._-](?:v\d+|old|backup|copy|bak))|(?:-旧|-副本| 2|\(1\)|\.final)",
@@ -95,13 +95,15 @@ def elect(groups: list[list[str]], facts: dict, git_tracked: set[str]) -> list[S
 
 
 def _signal_tuple(path: str, facts: dict, git_tracked: set[str]) -> tuple:
-    """提取一个文件的排序信号（与 _rank 优先级一一对应）。"""
+    """提取一个文件的排序信号（正向，越大越优；与 _rank 优先级一一对应）。
+
+    顺序：reachable > ref_count > 无明确旧版标记 > mtime。
+    """
     f = facts.get(path, {})
     return (
         bool(f.get("reachable")),
         int(f.get("ref_count", 0)),
-        path in git_tracked,
-        not has_name_version_marker(path),
+        not has_old_marker(path),
         int(f.get("mtime", 0)),
     )
 
@@ -109,23 +111,21 @@ def _signal_tuple(path: str, facts: dict, git_tracked: set[str]) -> tuple:
 def _is_decisive(a: str, b: str, facts: dict, git_tracked: set[str]) -> bool:
     """a 是否在某个高优先级信号上严格优于 b。
 
-    _rank 用 (reachable, ref_count, git_tracked, 无标记, mtime) 降序。布尔/计数信号
-    越靠前权重越大。我们在第一个出现差异的信号上要求严格占优（x > y），
-    才算"决定性区分"。全部信号相等 → False → 上层标 ambiguous。
+    _rank 用 (reachable, ref_count, 无明确旧版标记, mtime) 降序。布尔/计数信号越靠前权重越大。
+    我们在第一个出现差异的信号上要求严格占优（x > y），才算"决定性区分"。
+    全部信号相等 → False → 上层标 ambiguous。
 
-    附加保护：若唯一差异落在 `name_marker`（下标 3）或更靠后，而前三项
-    （reachable / ref_count / git_tracked）全部打平且都是"低位"（不可达、0 引用、
-    非 git tracked），则**不算决定性**——文件名版本标记方向不可靠，现行版带 v2
-    与旧版带 v2 无法仅凭文件名区分，宁可标 ambiguous。
+    关键保护：只有**方向确定**的信号才可作为决定性依据。`old_marker`（明确声明旧版）
+    方向确定，可决定性；`name_marker` 类（v2/new/final 等）方向不确定，不决定性；
+    `git_tracked` / `mtime` 不作为决定性依据。
     """
     sa = _signal_tuple(a, facts, git_tracked)
     sb = _signal_tuple(b, facts, git_tracked)
     for i, (x, y) in enumerate(zip(sa, sb)):
         if x != y:
+            # 下标 0,1,2 是 reachable / ref_count / 无明确旧版标记；下标 3（mtime）不可决定性。
             if i >= 3:
-                low_flat = all(sa[j] == sb[j] and not sa[j] for j in range(3))
-                if low_flat:
-                    return False
+                return False
             return x > y
     return False
 
@@ -137,8 +137,7 @@ def _rank(group: list[str], facts: dict, git_tracked: set[str]) -> list[str]:
         return (
             not bool(f.get("reachable")),          # reachable 优先（升序则 False 更先）
             -int(f.get("ref_count", 0)),           # ref_count 更大优先
-            not (path in git_tracked),             # git_tracked 优先
-            has_name_version_marker(path),         # 无标记优先
+            has_old_marker(path),                  # 无明确旧版标记优先
             -int(f.get("mtime", 0)),               # mtime 更新优先
         )
     return sorted(group, key=key)

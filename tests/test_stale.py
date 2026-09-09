@@ -29,13 +29,13 @@ def test_elect_marks_ambiguous_when_no_decisive_signal():
     from projstate.stale import elect
 
     facts = {
-        "app/importer.py": {"ref_count": 0, "reachable": False, "mtime": 100, "language": "python"},
-        "app/importer 2.py": {"ref_count": 0, "reachable": False, "mtime": 100, "language": "python"},
+        "app/merge.py": {"ref_count": 0, "reachable": False, "mtime": 100, "language": "python"},
+        "app/merge_alias.py": {"ref_count": 0, "reachable": False, "mtime": 100, "language": "python"},
     }
-    findings = elect([["app/importer.py", "app/importer 2.py"]], facts, set())
+    findings = elect([["app/merge.py", "app/merge_alias.py"]], facts, set())
     assert len(findings) == 1
     assert findings[0].canonical is None
-    assert findings[0].ambiguous == ("app/importer.py", "app/importer 2.py")
+    assert findings[0].ambiguous == ("app/merge.py", "app/merge_alias.py")
 
 
 def test_elect_prefers_referenced_over_unreferenced():
