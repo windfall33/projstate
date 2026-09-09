@@ -207,17 +207,30 @@ def _finding_dict(f) -> dict:
 
 
 def _read_task(root: Path) -> str:
-    for line in read_state(root).splitlines():
+    lines = read_state(root).splitlines()
+    for i, line in enumerate(lines):
         if line.startswith("# 当前任务"):
-            return line.replace("# 当前任务", "").strip() or "未记录"
+            tail = line.replace("# 当前任务", "").strip(" #:：-")
+            if tail:
+                return tail
+            # 标题行本身为空，取标题后第一个非空、非小标题、非占位的内容
+            for nxt in lines[i + 1:]:
+                s = nxt.strip()
+                if s and not s.startswith("##") and not s.startswith("-") and not s.startswith("*"):
+                    return s
+            return "未记录"
     return "未记录"
 
 
 def _read_next(root: Path) -> str:
     lines = read_state(root).splitlines()
     for i, line in enumerate(lines):
-        if line == "## 下一步" and i + 1 < len(lines):
-            return lines[i + 1].strip() or "见 .ai/STATE.md"
+        if line.strip() == "## 下一步":
+            for nxt in lines[i + 1:]:
+                s = nxt.strip()
+                if s and not s.startswith("##") and not s.startswith("-") and not s.startswith("*"):
+                    return s
+            return "见 .ai/STATE.md"
     return "见 .ai/STATE.md"
 
 
