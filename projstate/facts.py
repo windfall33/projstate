@@ -105,7 +105,6 @@ def extract_imports(source: bytes, language: str) -> tuple[str, ...]:
 def build_map(root: Path, files: list[Path]) -> dict:
     """构建 `{rel: {language, imports, ref_count, reachable}}`。"""
     result: dict[str, dict] = {}
-    # 候选文件的模块路径索引：'app/payment_v2' -> ['app/payment_v2.py']
     module_index: dict[str, list[str]] = {}
 
     for path in files:
@@ -134,6 +133,35 @@ def build_map(root: Path, files: list[Path]) -> dict:
                 result[target]["ref_count"] += 1
 
     return result
+
+
+def find_unresolved(root: Path, files: list[Path]) -> dict:
+    """收集"项目内相对引用（以 `.` 开头）但解析不到目标"的清单。
+
+    相对引用 resolve 不到 = 异常信号，须落盘（见 spec 9 节）；裸包名才视为外部依赖。
+    """
+    module_index: dict[str, list[str]] = {}
+    for path in files:
+        rel = rel_posix(root, path)
+        module_index.setdefault(_module_stem(rel), []).append(rel)
+
+    resolver = _build_resolver(root, module_index)
+    unresolved: dict[str, list[str]] = {}
+    for path in files:
+        rel = rel_posix(root, path)
+        try:
+            source = path.read_bytes()
+        except OSError:
+            continue
+        lang = detect_language(rel)
+        for imp in extract_imports(source, lang):
+            # 只关心项目内相对引用；绝对包名/裸名不在此列
+            if not imp.startswith("."):
+                continue
+            target = resolver.resolve(imp, rel)
+            if target is None:
+                unresolved.setdefault(rel, []).append(imp)
+    return unresolved
 
 
 def _module_stem(rel: str) -> str:

@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from projstate.facts import build_map, entry_points, extract_imports
+from projstate.facts import build_map, entry_points, extract_imports, find_unresolved
 
 
 def test_entry_points_detects_index_and_package_main(tmp_path: Path):
@@ -52,3 +52,13 @@ def test_build_map_resolves_python_absolute_import(tmp_path: Path):
     ])
     assert m["app/payment_v2.py"]["ref_count"] == 1
     assert m["app/payment.py"]["ref_count"] == 0
+
+
+def test_find_unresolved_records_broken_relative_import(tmp_path: Path):
+    """相对导入指向不存在的文件，须记入 unresolved 而非静默丢弃。"""
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "a.py").write_text("from .missing import x\n", encoding="utf-8")
+    (tmp_path / "src" / "b.py").write_text("from .a import y\n", encoding="utf-8")
+    unresolved = find_unresolved(tmp_path, [tmp_path / "src" / "a.py", tmp_path / "src" / "b.py"])
+    assert "src/a.py" in unresolved
+    assert unresolved["src/a.py"] == [".missing"]

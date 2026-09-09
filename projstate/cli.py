@@ -8,7 +8,7 @@ import json
 import sys
 from pathlib import Path
 
-from projstate.facts import build_map
+from projstate.facts import build_map, find_unresolved
 from projstate.languages import is_generated
 from projstate.render import (
     BEGIN_MARKER,
@@ -72,6 +72,7 @@ def cmd_refresh(root: Path) -> int:
     ignore = load_ignore(root)
     files = list(iter_files(root, ignore=ignore))
     map_data = build_map(root, files)
+    unresolved = find_unresolved(root, files)
     track = _git_tracked(root)
     groups = group_candidates(list(map_data.keys()))
     findings = elect(groups, map_data, track)
@@ -85,6 +86,7 @@ def cmd_refresh(root: Path) -> int:
     site = {"name": root.name, "fingerprint": _fingerprint(files), "count": len(files)}
 
     _write_json(ai / "map.json", {"files": map_data})
+    _write_json(ai / "unresolved.json", unresolved)
     (ai / "MAP.md").write_text(render_map(map_data, findings, site), encoding="utf-8")
     (ai / "HIP.md").write_text(render_hip(findings, generated), encoding="utf-8")
     _write_json(ai / "stale.json", [_finding_dict(f) for f in findings])
