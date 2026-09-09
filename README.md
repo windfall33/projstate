@@ -48,3 +48,9 @@
 
 零三方依赖（Python 标准库）。设计上借鉴 codegraph / Understand Anything 的局部可验证思路，
 但不复制第三方代码；两者 LICENSE 已核实均为 MIT。若不复制代码，无版权义务。
+
+## `.ai/` 的 git 策略
+
+`.ai/`（含 `map.json`、`MAP.md`、`HIP.md`、`stale.json`、`canonical_overrides.json`、
+`STATE.md`、`unresolved.json`）**一律进 git**：项目认知与代码同版本，换机器 / 换人拿到同一份。
+唯一排除的是 `.ai/.cache/`（增量缓存与路径历史，可重建），写入 `.gitignore`。
