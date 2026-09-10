@@ -74,6 +74,32 @@ def test_render_map_marks_ambiguous_group():
     assert "svc/feature_0_v2.py" in out
 
 
+def test_render_marks_decision_basis_not_inference():
+    """P0：定论来源只有「明确旧版标记」或「人工登记」，两种都不是推断，故不得再标「（推断）」。"""
+    findings = [
+        StaleFinding(
+            group_key=("app",),
+            canonical="app/auth.py",
+            superseded=("app/auth_old.py",),
+            signals={"group": ("app/auth.py", "app/auth_old.py")},
+            suggestion="建议归档（文件名明确声明旧版）",
+        ),
+        StaleFinding(
+            group_key=("svc",),
+            canonical="svc/feature_v2.py",
+            superseded=("svc/feature.py",),
+            signals={"group": ("svc/feature.py", "svc/feature_v2.py"), "overridden": True},
+            suggestion="人工确认（resolve）",
+        ),
+    ]
+    hip = render_hip(findings, [])
+    assert "（推断）" not in hip
+    assert "明确旧版标记" in hip
+    assert "人工登记" in hip
+    mp = render_map({}, findings, {"name": "x", "fingerprint": "f", "count": 0})
+    assert "（推断）" not in mp
+
+
 def test_render_hip_aggregates_many_ambiguous():
     """产物膨胀：超过阈值时聚合为统计+摘要，而非逐行列全部候选。"""
     findings = [

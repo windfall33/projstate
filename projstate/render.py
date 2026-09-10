@@ -8,6 +8,16 @@ END_MARKER = "<!-- projstate:end -->"
 # ambiguous 组超过此阈值时，产物不逐行列全部候选（避免退化成"我不知道"清单），改为聚合。
 AMBIGUOUS_DETAIL_LIMIT = 20
 
+# 已定论条目的依据说明。P0 收窄后只有两种定论来源，都不是「推断」，故不能再标「（推断）」。
+DECIDE_BASIS_HEADER = "现行版对照（定论依据：明确旧版标记 / 人工登记）"
+
+
+def _basis(f) -> str:
+    """该条定论的依据：人工登记（resolve）还是文件名明确声明旧版。"""
+    if getattr(f, "signals", {}).get("overridden"):
+        return "人工登记"
+    return "明确旧版标记"
+
 
 def render_map(map_data: dict, findings: list, site: dict) -> str:
     """事实层完整版：入口引用计数 + 阅读锚点 + 现行版对照。"""
@@ -36,9 +46,11 @@ def render_map(map_data: dict, findings: list, site: dict) -> str:
     decided = [f for f in findings if f.canonical is not None]
     ambiguous = [f for f in findings if f.canonical is None]
     if decided:
-        lines.append(f"现行版对照（推断）")
+        lines.append(DECIDE_BASIS_HEADER)
         for f in decided:
-            lines.append(f"  {f.canonical}  ← 现行版；已作废：{', '.join(f.superseded) if f.superseded else '无'}")
+            superseded = ', '.join(f.superseded) if f.superseded else '无'
+            lines.append(f"  {f.canonical}  ← 现行版；已作废：{superseded}"
+                         f"  （{_basis(f)}）")
         lines.append(f"")
     if ambiguous:
         lines.append(f"需人工确认（无决定性证据）")
@@ -65,10 +77,10 @@ def render_hip(findings: list, generated: list[str]) -> str:
     decided = [f for f in findings if f.canonical is not None]
     ambiguous = [f for f in findings if f.canonical is None]
     if decided:
-        lines.append(f"现行版对照（推断）")
+        lines.append(DECIDE_BASIS_HEADER)
         for f in decided:
             names = "，".join(f.superseded) if f.superseded else "无"
-            lines.append(f"  {f.canonical}  ← 当前    {names}")
+            lines.append(f"  {f.canonical}  ← 当前    {names}  （{_basis(f)}）")
         lines.append(f"")
     if ambiguous:
         lines.append(f"需人工确认（工具无决定性证据，不猜）")

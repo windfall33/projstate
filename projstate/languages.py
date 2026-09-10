@@ -30,7 +30,17 @@ GENERATED_EXTS: frozenset[str] = frozenset(
 # 明确的旧版语义词：方向确定，可作现行版选举的决定性信号。
 _OLD_WORDS = "old|backup|bak|legacy|deprecated|archive|original"
 # 疑似版本语义词：方向不确定，不作决定性信号。
-_AMBIG_WORDS = "v\\d+|new|next|final|latest|newest|refactor|rebuilt|copy|temp|tmp|test"
+# 不包含 test/spec —— 见 TEST_FILE_MARKER：测试文件不是「版本」，把它当版本词会让
+# `catalog.ts` 与 `catalog.test.ts` 被削成同一主干而同组，测试文件 ref_count=0 就被判「建议归档」。
+_AMBIG_WORDS = "v\\d+|new|next|final|latest|newest|refactor|rebuilt|copy|temp|tmp"
+
+# 测试文件标记：测试定义行为契约，是「该读的文件」，不是「旧版本」。
+# 命中者永不参与版本归组（见 stale.group_candidates 的硬闸门）。
+TEST_FILE_MARKER = re.compile(
+    r"\.(test|spec)\.(ts|tsx|js|jsx|mjs|cjs|py)$"
+    r"|_test\.py$|^test_.*\.py$",
+    re.IGNORECASE,
+)
 
 # 明确旧版标记：方向确定。例：export_old.py / export_backup.py / settle-旧.py / a_original.py
 OLD_NAME_MARKER = re.compile(
@@ -48,8 +58,11 @@ AMBIG_VERSION_MARKER = re.compile(
 
 # 归组用：去掉一切版本/旧版/副本/年份后缀标记，得到主干名。
 # 覆盖明确旧版 + 疑似版本 + 中文副本 + 年份后缀（2026 等）。不含裸数字（feature_0 非版本）。
+# 第一段用**前瞻** `(?=[._-]|$)` 而非吃掉尾随分隔符：否则 `registry-entry-v1.schema.json`
+# 里的 `-v1.` 会把 "schema" 前的点一并吃掉，主干变成 `registry-entryschema`，
+# 与不带版本号的 `registry-entry.schema.json` 永不归组；`a_v2_final.py` 也会被吃成 `afinal`。
 VERSION_STEM_MARKER = re.compile(
-    rf"(?:[._-](?:{_OLD_WORDS}|{_AMBIG_WORDS})(?:\.|_|$))"
+    rf"(?:[._-](?:{_OLD_WORDS}|{_AMBIG_WORDS})(?=[._-]|$))"
     r"|[._-](?:旧|副本)|-\s*(?:旧|副本)"
     r"|(?:[._-](?:19|20)\d{2}$)"
     r"|\(\d+\)$",
@@ -110,3 +123,8 @@ def has_old_marker(rel: str) -> bool:
         return True
     stem = name.rsplit(".", 1)[0]
     return bool(OLD_NAME_MARKER.search(stem))
+
+
+def is_test_file(rel: str) -> bool:
+    """是否测试文件。测试与源文件是并存关系，不是版本关系，故永不参与版本归组。"""
+    return bool(TEST_FILE_MARKER.search(rel.replace("\\", "/")))
