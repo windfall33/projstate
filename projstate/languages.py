@@ -36,9 +36,14 @@ _AMBIG_WORDS = "v\\d+|new|next|final|latest|newest|refactor|rebuilt|copy|temp|tm
 
 # 测试文件标记：测试定义行为契约，是「该读的文件」，不是「旧版本」。
 # 命中者永不参与版本归组（见 stale.group_candidates 的硬闸门）。
+#
+# 注意 `test_` 前缀必须锚在**文件名**上而非整条相对路径：写成 `^test_` 会让
+# `tests/agent/test_curator.py`（Python 最常见的布局）全部漏网，于是
+# `test_curator.py` + `test_curator_backup.py` 被归为同组，后者因名字带 _backup
+# 被判「已作废、建议归档」——正是本闸门要防的「把行为契约误报成废弃实现」。
 TEST_FILE_MARKER = re.compile(
     r"\.(test|spec)\.(ts|tsx|js|jsx|mjs|cjs|py)$"
-    r"|_test\.py$|^test_.*\.py$",
+    r"|_test\.py$|(?:^|/)test_[^/]*\.py$",
     re.IGNORECASE,
 )
 

@@ -109,6 +109,11 @@ def render_agents_block(summary: dict) -> str:
     lines: list[str] = []
     lines.append(BEGIN_MARKER)
     lines.append(f"任务：{summary.get('task','未记录')} · 下一步：{summary.get('next','见 .ai/STATE.md')} · 候选 {summary.get('count',0)} 文件")
+    stale = summary.get("stale") or []
+    if stale:
+        lines.append(
+            f"⚠️ {len(stale)} 条结论的依赖文件已变更，已不可当现状，须复核（见 `.ai/STATE.md` 中标了「依赖已变更」的行）"
+        )
     lines.append(f"")
     lines.append(f"用法：改文件前 `projstate explain <path>`；查现行版 `projstate canonical <名>`；查卫生 `projstate check`")
     lines.append(f"完整地图：`.ai/MAP.md` · 完整卫生：`.ai/HIP.md`")

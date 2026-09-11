@@ -54,7 +54,7 @@ def group_candidates(paths: list[str]) -> list[list[str]]:
 def elect(groups: list[list[str]], facts: dict, git_tracked: set[str]) -> list[StaleFinding]:
     """对每组选举现行版。
 
-    策略（P0 收窄后）：**只有「明确旧版标记」可定论**。
+    策略（P0 收窄后）：**只有「明确旧版标记」可定论**，且**被引用的成员可否决该定论**。
     组内同时存在「带明确旧版标记」与「不带标记」两类、且不带标记的只有一个时，
     该文件即现行版，带标记的成员全部作废；其余情况一律 ambiguous。
 
@@ -71,7 +71,7 @@ def elect(groups: list[list[str]], facts: dict, git_tracked: set[str]) -> list[S
     findings: list[StaleFinding] = []
     for group in groups:
         group_key = tuple(group[0].replace("\\", "/").split("/")[:-1])
-        decided = _decide_by_old_marker(group)
+        decided = _decide_by_old_marker(group, facts)
         if decided is not None:
             canonical, superseded = decided
             findings.append(
@@ -115,7 +115,7 @@ def elect(groups: list[list[str]], facts: dict, git_tracked: set[str]) -> list[S
     return findings
 
 
-def _decide_by_old_marker(group: list[str]) -> tuple[str, tuple[str, ...]] | None:
+def _decide_by_old_marker(group: list[str], facts: dict) -> tuple[str, tuple[str, ...]] | None:
     """只有「明确旧版标记」方向确定，可作为定论依据。
 
     组内恰好存在一个「不带明确旧版标记」的成员、且至少有一个「带标记」的成员时，
@@ -124,12 +124,21 @@ def _decide_by_old_marker(group: list[str]) -> tuple[str, tuple[str, ...]] | Non
     典型：`auth.py` + `auth_old.py` → 定论 `auth.py`
          `payment.py` + `payment_v2.py` → None（v2 方向不确定，等人工登记）
          `a_old.py` + `a_backup.py` → None（全是旧版声明，缺现行候选）
+
+    **否决闸门**：任何被本项目文件引用的成员，一律不得因名字被定论作废。
+    `ref_count > 0` 是「确证」级证据（它真的在服役），文件名只是「声明」。
+    确证必须能否决声明——否则会建议归档 `agent/curator_backup.py`（711 行、
+    正被 `curator.py` import）这类活代码。实证：hermes-agent 上该规则把定论
+    误报从 2/2 降到 0/2，而 `wml-2010/2012/2018.xsd` 那类真歧义组仍保持 ambiguous。
     """
     marked = [p for p in group if has_old_marker(p)]
     clean = [p for p in group if not has_old_marker(p)]
-    if marked and len(clean) == 1:
-        return clean[0], tuple(marked)
-    return None
+    if not (marked and len(clean) == 1):
+        return None
+    referenced = [p for p in marked if int(facts.get(p, {}).get("ref_count", 0)) > 0]
+    if referenced:
+        return None
+    return clean[0], tuple(marked)
 
 
 def _rank(group: list[str], facts: dict, git_tracked: set[str]) -> list[str]:

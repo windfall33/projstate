@@ -17,7 +17,7 @@
 | 命令 | 作用 |
 |---|---|
 | `projstate init` | 接入当前项目（写 AGENTS.md 标记块，需确认） |
-| `projstate log <text>` | 追加一行到 `.ai/STATE.md` |
+| `projstate log <text>` | 追加一行到 `.ai/STATE.md`，并锚定该结论引用的文件哈希 |
 | `projstate status` | 打印任务状态 |
 | `projstate refresh` | 增量刷新事实层+卫生层+渲染 AGENTS.md 块 |
 | `projstate check` | 只读体检（干净=0，有发现=1） |
@@ -49,7 +49,16 @@
 - **ambiguous 产物按阈值聚合**：超过 20 组待确认时，HIP.md / MAP.md 不逐行列全部候选，
   改为"统计 + 前 20 组摘要 + 指向 `.ai/stale.json`"，避免退化成超长"我不知道"清单。
 - 同一会话内地图会旧，直到下次 refresh。
-- 状态层靠人/agent 自律维护；工具不替用户判断"做完了没"。
+- **被引用的成员可否决"旧版"定论**：`ref_count > 0` 是「确证」级证据（它真的在服役），
+  文件名只是「声明」。确证必须能否决声明——否则会建议归档 `agent/curator_backup.py`
+  这类 711 行、被 6 个文件提及的活代码。实证：hermes-agent 上该否决把定论误报从 2/2 降到 0/2。
+- **宁可漏报，不可误杀**：工具只在"同目录 + 同扩展名 + 同主干"的组内定论。
+  没有同名兄弟的孤立旧文件（如一份过期的 `docs/drafts/xxx.md`）**永远不会被判定**——
+  这是刻意的：漏报只是少一条提示，误杀会让 agent 主动跳过活代码。
+- 状态层靠人/agent 自律维护；工具不替用户判断"做完了没"。**但工具会记录每条结论写下来时
+  引用的文件内容**（`.ai/state_deps.json`）：这些文件一变更，该结论就在 `STATE.md` 里被就地
+  标上 `⚠️ 依赖已变更：<path>`，并在 `refresh` / `check` / AGENTS.md 标记块中重复告警。
+  标记是双向且幂等的——文件改回原样则标记自动消失，不会堆叠。
 
 ## 依赖与许可
 
@@ -59,5 +68,5 @@
 ## `.ai/` 的 git 策略
 
 `.ai/`（含 `map.json`、`MAP.md`、`HIP.md`、`stale.json`、`canonical_overrides.json`、
-`STATE.md`、`unresolved.json`）**一律进 git**：项目认知与代码同版本，换机器 / 换人拿到同一份。
+`STATE.md`、`state_deps.json`、`unresolved.json`）**一律进 git**：项目认知与代码同版本，换机器 / 换人拿到同一份。
 唯一排除的是 `.ai/.cache/`（增量缓存与路径历史，可重建），写入 `.gitignore`。

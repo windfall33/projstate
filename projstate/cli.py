@@ -57,8 +57,13 @@ def _git_tracked(root: Path) -> set[str]:
 
 
 def cmd_log(root: Path, text: str) -> int:
+    from projstate import statedeps
+
     line = append_state(root, text)
+    n = statedeps.snapshot_line(root, line)
     print(f"[projstate] 已记录：{line}")
+    if n:
+        print(f"[projstate] 已锚定该结论引用的 {n} 个文件；它们日后变更会在此行标出")
     return 0
 
 
@@ -111,6 +116,11 @@ def cmd_refresh(root: Path) -> int:
     (ai / "HIP.md").write_text(render_hip(findings, generated), encoding="utf-8")
     _write_json(ai / "stale.json", [_finding_dict(f) for f in findings])
 
+    # 状态层复核：STATE.md 里结论的依赖若已变更，就地标出
+    from projstate import statedeps
+
+    stale_lines = statedeps.annotate(root)
+
     # 写 AGENTS.md 标记块
     agents = root / "AGENTS.md"
     if not agents.is_file():
@@ -120,9 +130,14 @@ def cmd_refresh(root: Path) -> int:
             "task": _read_task(root),
             "next": _read_next(root),
             "count": len(files),
+            "stale": stale_lines,
         })
         agents.write_text(_replace_block(agents.read_text(encoding="utf-8"), block), encoding="utf-8")
     print(f"[projstate] refresh 完成：{len(files)} 候选，{len(findings)} 组旧版判定")
+    if stale_lines:
+        print(f"[projstate] ⚠️ {len(stale_lines)} 条结论的依赖已变更，已在 STATE.md 标出，需复核：")
+        for ln in stale_lines:
+            print(f"  {ln}")
     return 0
 
 
@@ -174,6 +189,20 @@ def cmd_check(root: Path) -> int:
         if entries:
             print(f"[projstate] {len(entries)} 组旧版判定待处理")
             dirty = True
+    # 状态层：结论的依赖是否已变更（只报告，不写盘——check 是只读体检）
+    from projstate import statedeps
+
+    data = statedeps.load(root)
+    flagged: list[str] = []
+    for key, deps in data["lines"].items():
+        bad = statedeps._changed(root, deps)
+        if bad:
+            flagged.append(f"{key}  ← 依赖已变更：{', '.join(bad)}")
+    if flagged:
+        print(f"[projstate] ⚠️ {len(flagged)} 条结论的依赖已变更，需复核：")
+        for f in flagged:
+            print(f"  {f}")
+        dirty = True
     return 1 if dirty else 0
 
 

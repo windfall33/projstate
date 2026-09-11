@@ -62,10 +62,19 @@ def _extract_py_imports(text: str) -> tuple[str, ...]:
             for alias in node.names:
                 imports.append(alias.name)
         elif isinstance(node, ast.ImportFrom):
+            prefix = "." * node.level
             if node.level:  # 相对导入：from .xxx / from ..xxx
-                imports.append("." * node.level + (node.module or ""))
+                imports.append(prefix + (node.module or ""))
             else:
                 imports.append(node.module or "")
+            # `from pkg import submodule` 中被导入的名字可能是**子模块**，只记 node.module
+            # 会把它整个漏掉。实证：hermes-agent 的 `from agent import curator_backup`
+            # 因此让 curator_backup.py 的 ref_count=0，711 行、被 6 个文件提及的活代码
+            # 被旧版规则判为「已作废，建议归档」。
+            # 追加 module.name 形式；解析不到的（函数名、常量）自然落空，不影响既有判定。
+            base = prefix + (node.module + "." if node.module else "")
+            for alias in node.names:
+                imports.append(f"{base}{alias.name}")
     return tuple(dict.fromkeys(imports))
 
 
