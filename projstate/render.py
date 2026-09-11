@@ -8,6 +8,9 @@ END_MARKER = "<!-- projstate:end -->"
 # ambiguous 组超过此阈值时，产物不逐行列全部候选（避免退化成"我不知道"清单），改为聚合。
 AMBIGUOUS_DETAIL_LIMIT = 20
 
+# 命名推断的入口候选最多列几个（按被引次数取前 N）。monorepo 里叫 index 的文件可能上百。
+ENTRY_NAME_LIMIT = 10
+
 # 已定论条目的依据说明。P0 收窄后只有两种定论来源，都不是「推断」，故不能再标「（推断）」。
 DECIDE_BASIS_HEADER = "现行版对照（定论依据：明确旧版标记 / 人工登记）"
 
@@ -19,6 +22,51 @@ def _basis(f) -> str:
     return "明确旧版标记"
 
 
+def _entry_basis(entry: dict) -> str | None:
+    """入口判定依据；老 map.json 没有该字段时按 reachable 退化为「命名推断」。"""
+    return entry.get("entry_basis") or ("name" if entry.get("reachable") else None)
+
+
+def anchor_lines(map_data: dict, top_limit: int = 20) -> list[str]:
+    """阅读锚点：入口（确证与推断**分开列**）+ 关键文件（按被引次数，确证）。
+
+    入口必须按依据分开：manifest 声明是确证，命名推断不是。混在一起标「确证」，
+    正是本项目要防的事——monorepo 里每个 barrel 都叫 index，按命名判会把十几个
+    ref_count=0 的文件列成「必看入口」，与 ProjectBrain 的 F3
+    （critical = 字母序前 12 个配置文件）是同一个失败模式。
+
+    由 render_map 与 MCP 的 projstate_context 共用：两份实现必然漂移，
+    而"工具说的和事实不一样"正是本项目要防的事。
+    """
+    lines: list[str] = []
+    manifest = sorted(r for r, e in map_data.items() if _entry_basis(e) == "manifest")
+    by_name = sorted(
+        (r for r, e in map_data.items() if _entry_basis(e) == "name"),
+        key=lambda r: -map_data[r].get("ref_count", 0),
+    )
+    if manifest:
+        lines.append("入口（manifest 声明，确证）")
+        for r in manifest:
+            lines.append(f"  {r}  ·  被 {map_data[r].get('ref_count', 0)} 个文件引用")
+        lines.append("")
+    if by_name:
+        lines.append("入口候选（按命名推断，**非确证**；按被引次数排序）")
+        for r in by_name[:ENTRY_NAME_LIMIT]:
+            lines.append(f"  {r}  ·  被 {map_data[r].get('ref_count', 0)} 个文件引用")
+        if len(by_name) > ENTRY_NAME_LIMIT:
+            lines.append(f"  …另有 {len(by_name) - ENTRY_NAME_LIMIT} 个同名文件，完整清单见 .ai/map.json")
+        lines.append("")
+
+    by_ref = sorted(map_data.items(), key=lambda kv: kv[1].get("ref_count", 0), reverse=True)
+    top = [r for r, e in by_ref if e.get("ref_count", 0) > 0][:top_limit]
+    if top:
+        lines.append("关键文件（按被引次数，确证）")
+        for r in top:
+            lines.append(f"  {r}  ·  被 {map_data[r].get('ref_count', 0)} 个文件引用")
+        lines.append("")
+    return lines
+
+
 def render_map(map_data: dict, findings: list, site: dict) -> str:
     """事实层完整版：入口引用计数 + 阅读锚点 + 现行版对照。"""
     lines: list[str] = []
@@ -28,20 +76,7 @@ def render_map(map_data: dict, findings: list, site: dict) -> str:
     lines.append(f"> 这是**阅读锚点**，不是依赖图。完整事实请用 grep。")
     lines.append(f"")
 
-    reachable = [r for r, e in map_data.items() if e.get("reachable")]
-    if reachable:
-        lines.append(f"入口（确证）")
-        for r in sorted(reachable):
-            lines.append(f"  {r}  ·  被 {map_data[r].get('ref_count',0)} 个文件引用")
-        lines.append(f"")
-
-    by_ref = sorted(map_data.items(), key=lambda kv: kv[1].get("ref_count", 0), reverse=True)
-    top = [r for r, e in by_ref if e.get("ref_count", 0) > 0][:20]
-    if top:
-        lines.append(f"关键文件（按被引次数，确证）")
-        for r in top:
-            lines.append(f"  {r}  ·  被 {map_data[r].get('ref_count',0)} 个文件引用")
-        lines.append(f"")
+    lines.extend(anchor_lines(map_data))
 
     decided = [f for f in findings if f.canonical is not None]
     ambiguous = [f for f in findings if f.canonical is None]

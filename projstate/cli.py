@@ -464,6 +464,7 @@ def main(argv: list[str] | None = None) -> int:
     p_wy = sub.add_parser("why"); p_wy.add_argument("path")
     p_re = sub.add_parser("resolve"); p_re.add_argument("path")
     p_ack = sub.add_parser("ack"); p_ack.add_argument("path", nargs="?")
+    p_mcp = sub.add_parser("mcp"); p_mcp.add_argument("--root", default=None)
     sub.add_parser("init")
     sub.add_parser("archive")
     sub.add_parser("restore")
@@ -494,6 +495,10 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_resolve(root, args.path)
     if cmd == "ack":
         return cmd_ack(root, args.path)
+    if cmd == "mcp":
+        from projstate.mcp import serve
+
+        return serve(Path(args.root) if args.root else root)
     if cmd == "selftest":
         return cmd_selftest()
     if cmd == "init":

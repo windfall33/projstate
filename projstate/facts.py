@@ -87,8 +87,14 @@ def _extract_py_imports(text: str) -> tuple[str, ...]:
     return _py_specs(text)[0]
 
 
-def entry_points(root: Path, rel: str, language: str) -> bool:
-    """是否入口：package.json main/bin 指向，或 index/main/app 命名（app 仅 js 弱判定）。"""
+def _entry_basis(root: Path, rel: str, language: str) -> str | None:
+    """入口判定**依据**：'manifest'（配置声明，确证）/ 'name'（命名推断）/ None。
+
+    必须区分这两者：把命名推断标成「确证」，正是本项目要防的事。
+    monorepo 里每个 barrel 文件都叫 index，按命名判会把十几个 ref_count=0 的
+    文件列成「必看入口」——与 ProjectBrain 的 F3（critical = 字母序前 12 个
+    配置文件）是同一个失败模式。
+    """
     pkg = root / "package.json"
     if pkg.is_file():
         try:
@@ -104,10 +110,17 @@ def entry_points(root: Path, rel: str, language: str) -> bool:
                 targets.extend(v for v in val.values() if isinstance(v, str))
         for t in targets:
             if _normalize(t) == _normalize(rel):
-                return True
+                return "manifest"
     name = rel.replace("\\", "/").split("/")[-1]
     stem = name.split(".")[0]
-    return stem in {"index", "main"} or (stem == "app" and language == "js")
+    if stem in {"index", "main"} or (stem == "app" and language == "js"):
+        return "name"
+    return None
+
+
+def entry_points(root: Path, rel: str, language: str) -> bool:
+    """是否入口（任依据命中皆算）。依据本身见 _entry_basis。"""
+    return _entry_basis(root, rel, language) is not None
 
 
 def extract_imports(source: bytes, language: str) -> tuple[str, ...]:
@@ -142,11 +155,13 @@ def build_map(root: Path, files: list[Path]) -> dict:
         sub_by_rel[rel] = sub_specs
         # 建立模块路径索引（去扩展名，POSIX）
         module_index.setdefault(_module_stem(rel), []).append(rel)
+        basis = _entry_basis(root, rel, lang)
         result[rel] = {
             "language": lang,
             "imports": list(imports),
             "ref_count": 0,
-            "reachable": entry_points(root, rel, lang),
+            "reachable": basis is not None,
+            "entry_basis": basis,
             "mtime": int(path.stat().st_mtime),
         }
 

@@ -27,6 +27,7 @@
 | `projstate why <path>` | 为什么判它陈旧 |
 | `projstate resolve <候选>` | 人为确认某候选为现行版，写入 `.ai/canonical_overrides.json`，永久生效 |
 | `projstate ack [文档]` | 接受某文档当前的依赖状态（省略路径 = 全部），此后下一次变更才会再报 |
+| `projstate mcp [--root DIR]` | 以 stdio 启动只读 MCP 服务，供 agent 直接调用 |
 | `projstate task <名>` | 设置 `STATE.md` 的当前任务（与 log 的下一步分开） |
 
 ## 已知限制
@@ -71,6 +72,46 @@
 - **ack 是噪声抑制的必需品，不是可选项**：活跃开发中，被引用的文件每次改动都会把文档标红。
   没有 `projstate ack` 这条出路，清单会迅速退化成狼来了——机制会把自己废掉。
   ack 记录留痕（`上次接受于 <日期>`），且已失效的文档**不会因为再跑一次 refresh 而自愈**。
+
+## MCP 服务（给 agent 直接调用）
+
+`projstate mcp` 以 stdio 启动一个**只读** MCP 服务。工具的输入输出与 CLI 同源
+（共用同一份实现，避免"工具说的和事实不一样"）。
+
+**铁律：只报告，永不筛选。** 不提供检索、不提供重要性推断、不提供清理建议。
+这是 ProjectBrain 的实测教训：工具一旦替 agent 决定"哪些文件不该看"，它就会
+以权威身份误导——`listRelevantFiles` 因一次误分类静默跳过正确答案
+（改回 status 后同一查询从 0 条变 4 条），`load_context` 的 critical 清单
+是字母序前 12 个配置文件，源码模块一个都进不去。
+
+提供 6 个工具，全部只读：
+
+| 工具 | 作用 |
+|---|---|
+| `projstate_status` | 当前任务/进展 + 哪些结论的依赖已变更 |
+| `projstate_context` | 一页就位：锚点 + 现行版对照 + 陈旧告警 |
+| `projstate_explain` | 改某文件前读它：被谁引用、引用了谁、是否入口 |
+| `projstate_canonical` | 该概念现行版；**无证据时明确答"不确定"并列候选，绝不猜** |
+| `projstate_check` | 只读体检 |
+| `projstate_why` | 某文件为什么被判陈旧，附触发信号 |
+
+**入口分「确证」与「推断」两栏**：`package.json` 声明的是确证，按文件名
+（`index` / `main`）猜出来的标为"非确证候选"并按被引次数排序、封顶 10 条。
+混为一谈会把 monorepo 里上百个 barrel 文件列成"必看入口"——与 ProjectBrain 的
+F3 是同一个失败模式。
+
+零三方依赖：MCP 的 stdio 传输就是按行分隔的 JSON-RPC 2.0，手写实现，不引入 mcp SDK。
+
+```json
+{
+  "mcpServers": {
+    "projstate": {
+      "command": "projstate",
+      "args": ["mcp", "--root", "/path/to/your/project"]
+    }
+  }
+}
+```
 
 ## 依赖与许可
 

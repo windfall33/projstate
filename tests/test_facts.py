@@ -14,6 +14,27 @@ def test_entry_points_detects_main_app_files():
     assert entry_points(Path("."), "app.py", "python") is False  # app.py 经包名判断；此处无包名
 
 
+def test_entry_basis_distinguishes_manifest_from_name(tmp_path: Path):
+    """入口依据必须可区分：manifest 声明是确证，命名推断不是。
+
+    混为一谈会把 monorepo 里十几个叫 index 的 barrel 文件标成「确证入口」，
+    与 ProjectBrain 的 F3（critical = 字母序前 12 个配置文件）是同一失败模式。
+    """
+    from projstate.facts import _entry_basis
+
+    (tmp_path / "package.json").write_text('{"main":"src/main/index.js"}', encoding="utf-8")
+    assert _entry_basis(tmp_path, "src/main/index.js", "js") == "manifest"
+    assert _entry_basis(tmp_path, "src/shared/index.ts", "ts") == "name"
+    assert _entry_basis(tmp_path, "src/util.py", "python") is None
+
+
+def test_build_map_records_entry_basis(tmp_path: Path):
+    (tmp_path / "index.js").write_text("export {};\n", encoding="utf-8")
+    m = build_map(tmp_path, [tmp_path / "index.js"])
+    assert m["index.js"]["entry_basis"] == "name"
+    assert m["index.js"]["reachable"] is True
+
+
 def test_extract_imports_js_listed():
     src = b'import a from "./a";\nconst b = require("./b");\n'
     assert set(extract_imports(src, "js")) == {"./a", "./b"}

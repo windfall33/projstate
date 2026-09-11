@@ -9,8 +9,38 @@ def test_render_map_lists_entries_and_refs():
     }
     out = render_map(data, [], {"name": "demo", "fingerprint": "a1b2", "count": 2})
     assert "src/main.js" in out
-    assert "（确证）" in out
     assert "阅读锚点" in out
+    # 只有命名依据 → 必须标成「非确证」候选。旧实现在这里写「入口（确证）」，
+    # 把按文件名猜出来的东西标成确证——正是本项目要防的事。
+    assert "入口候选" in out
+    assert "非确证" in out
+    assert "关键文件（按被引次数，确证）" in out
+
+
+def test_render_map_separates_manifest_entries_from_name_guesses():
+    data = {
+        "src/index.js": {"language": "js", "ref_count": 0, "reachable": True,
+                         "entry_basis": "name", "mtime": 1},
+        "bin/cli.js": {"language": "js", "ref_count": 0, "reachable": True,
+                       "entry_basis": "manifest", "mtime": 2},
+    }
+    out = render_map(data, [], {"name": "demo", "fingerprint": "x", "count": 2})
+    assert "入口（manifest 声明，确证）" in out
+    assert "入口候选（按命名推断，**非确证**" in out
+    assert out.index("bin/cli.js") < out.index("src/index.js")
+
+
+def test_anchor_lines_caps_name_guesses():
+    """命名推断的候选要封顶，否则 monorepo 里上百个 index 会把锚点淹掉。"""
+    from projstate.render import ENTRY_NAME_LIMIT, anchor_lines
+
+    data = {
+        f"pkg{i}/index.ts": {"language": "ts", "ref_count": 0, "reachable": True,
+                             "entry_basis": "name", "mtime": i}
+        for i in range(ENTRY_NAME_LIMIT + 7)
+    }
+    out = "\n".join(anchor_lines(data))
+    assert "另有 7 个同名文件" in out
 
 
 def test_render_hip_flags_superseded():
