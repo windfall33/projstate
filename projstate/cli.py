@@ -8,6 +8,7 @@ import sys
 from pathlib import Path
 
 from projstate import brief
+from projstate.draft import changed_files, facts, git_head, render_lines
 from projstate.facts import build_map, find_unresolved
 from projstate.languages import is_generated
 from projstate.render import render_hip, render_map
@@ -171,10 +172,10 @@ def cmd_check(root: Path) -> int:
     return 1 if dirty else 0
 
 
-def cmd_brief(root: Path, action: str) -> int:
-    """交接单：`show` 打印当前块，`stamp` 只更新指纹戳（正文不动）。
+def cmd_brief(root: Path, action: str, since: str | None = None) -> int:
+    """交接单：`show` 打印、`stamp` 更新指纹戳、`draft` 机械生成草稿、`check` 单一退出码。
 
-    写正文请直接改 AGENTS.md 的块——agent 改 markdown 比学一套新参数可靠。
+    写"为什么/坑"请直接改 AGENTS.md 的块——agent 改 markdown 比学一套新参数可靠。
     """
     text = brief.read_agents(root)
     if action == "show":
@@ -193,9 +194,10 @@ def cmd_brief(root: Path, action: str) -> int:
     if action == "stamp":
         files = list(iter_files(root, ignore=load_ignore(root)))
         src = brief.fingerprint_files(files)
+        head = git_head(root)
         had = brief.read_block(text) is not None
-        brief.write_agents(root, brief.set_stamp(text, src))
-        print(f"[projstate] 交接单已盖章：src={src} at={brief.now_stamp()}"
+        brief.write_agents(root, brief.set_stamp(text, src, head=head))
+        print(f"[projstate] 交接单已盖章：src={src} head={head[:7]} at={brief.now_stamp()}"
               + ("" if had else f"（原无块，已新建于 {brief.AGENTS_FILE}）"))
         return 0
     if action == "check":
@@ -214,7 +216,25 @@ def cmd_brief(root: Path, action: str) -> int:
                   "`projstate brief stamp`", file=sys.stderr)
             return 1
         return 0
-    print("[projstate] 用法：projstate brief [show|stamp|check]", file=sys.stderr)
+    if action == "draft":
+        if brief.read_block(text) is None:
+            print(f"[projstate] {brief.AGENTS_FILE} 里没有交接单块，先 init 或 refresh",
+                  file=sys.stderr)
+            return 1
+        st = brief.read_stamp(text)
+        files, source = changed_files(root, st)
+        if not files:
+            print(f"[projstate] 没检测到需要写进交接单的改动（来源：{source}）")
+            return 0
+        lines = render_lines(root, files, facts(root))
+        new_body = brief.fill_draft(brief.body_of_text(text), lines)
+        src = brief.fingerprint_files(list(iter_files(root, ignore=load_ignore(root))))
+        brief.write_agents(root, brief.upsert_block(
+            text, brief.render_block(new_body, src, brief.now_stamp(), git_head(root))))
+        print(f"[projstate] 草稿已写入 {len(files)} 个改动文件（来源：{source}），并已盖章。")
+        print("[projstate] 剩下的只有两行，该你写：为什么这么改、踩了什么坑。")
+        return 0
+    print("[projstate] 用法：projstate brief [show|stamp|draft|check]", file=sys.stderr)
     return 2
 
 
@@ -497,12 +517,13 @@ def _ensure_brief(root: Path, files: list[Path] | None = None) -> str:
     if files is None:
         files = list(iter_files(root, ignore=load_ignore(root)))
     src = brief.fingerprint_files(files)
+    head = git_head(root)
     if brief.read_block(text) is None:
-        brief.write_agents(root, brief.upsert_block(text, brief.default_block(src)))
+        brief.write_agents(root, brief.upsert_block(text, brief.default_block(src, head=head)))
         return "inserted" if existed else "created"
     if brief.read_stamp(text) is None:
         # 历史版本的块没有指纹戳：补戳，正文不动
-        brief.write_agents(root, brief.set_stamp(text, src))
+        brief.write_agents(root, brief.set_stamp(text, src, head=head))
     return "kept"
 
 
@@ -542,7 +563,9 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("init")
     p_br = sub.add_parser("brief")
     p_br.add_argument("action", nargs="?", default="show",
-                      choices=["show", "stamp", "check"])
+                      choices=["show", "stamp", "check", "draft"])
+    p_br.add_argument("--since", default=None,
+                      help="draft 的基线（git 能识别的任何时间/引用）；默认用上次盖章时间")
     p_hk = sub.add_parser("hook")
     p_hk.add_argument("action", nargs="?", default="status",
                       choices=["status", "install", "uninstall"])
@@ -580,7 +603,7 @@ def main(argv: list[str] | None = None) -> int:
     if cmd == "init":
         return cmd_init(root)
     if cmd == "brief":
-        return cmd_brief(root, args.action)
+        return cmd_brief(root, args.action, args.since)
     if cmd == "hook":
         return cmd_hook(root, args.action, args.target)
     if cmd in ("archive", "restore"):

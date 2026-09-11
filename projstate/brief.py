@@ -36,6 +36,7 @@ BLOCK_RE = re.compile(
 STAMP_RE = re.compile(
     r"<!--\s*projstate:stamp\s+src=([0-9a-fA-F]{4,})"
     r"(?:\s+body=([0-9a-fA-F]{4,}))?"
+    r"(?:\s+head=([0-9a-fA-F]{7,40}|none))?"
     r"\s+at=([0-9T:\-+]{10,25})\s*-->"
 )
 
@@ -43,8 +44,9 @@ BEGIN_MARKER = "<!-- projstate:begin 本块由人/agent 维护；会话结束前
 
 TEMPLATE_BODY = """## 交接单（换窗口 / 换 agent 先读这里）
 
-> 改代码前先读本块；结束本次会话前更新下面几行，然后跑一次 `projstate brief stamp`。
-> 没更新的话 `projstate check` 会报"交接单已过期"。
+> 改代码前先读本块。**结束本次会话前**：先跑 `projstate brief draft`
+> （它会把"你改了哪些文件、定义了什么"机械写进下面并盖章），然后你只需要补两行
+> ——"为什么这么改"和"踩了什么坑"。不更新的话 `brief check` 会报"交接单已过期"。
 
 - 当前任务：
 - 下一步：
@@ -69,20 +71,28 @@ def now_stamp() -> str:
     return datetime.now().strftime("%Y-%m-%dT%H:%M")
 
 
-def render_block(body: str, src: str, at: str) -> str:
-    """块 = 标记头 + 正文 + 指纹戳 + 标记尾。"""
+def render_block(body: str, src: str, at: str, head: str | None = None) -> str:
+    """块 = 标记头 + 正文 + 指纹戳 + 标记尾。
+
+    戳里记 `head=<commit>`：草稿靠它精确回答"自上次盖章起改了什么"。
+    只用时间戳做不到——git 的 `--since` 是分钟/秒粒度，会把同一分钟的基线提交也算进来。
+    """
     body = body.strip("\n")
     bh = hashlib.sha256(body.encode("utf-8")).hexdigest()[:12]
+    stamp = f"src={src} body={bh}"
+    if head:
+        stamp += f" head={head}"
+    stamp += f" at={at}"
     return (
         f"{BEGIN_MARKER}\n"
         f"{body}\n\n"
-        f"<!-- projstate:stamp src={src} body={bh} at={at} -->\n"
+        f"<!-- projstate:stamp {stamp} -->\n"
         f"{END_MARKER}\n"
     )
 
 
-def default_block(src: str, at: str | None = None) -> str:
-    return render_block(TEMPLATE_BODY, src, at or now_stamp())
+def default_block(src: str, at: str | None = None, head: str | None = None) -> str:
+    return render_block(TEMPLATE_BODY, src, at or now_stamp(), head)
 
 
 def read_block(text: str) -> str | None:
@@ -100,6 +110,7 @@ class Stamp(NamedTuple):
 
     src: str
     body: str | None
+    head: str | None
     at: str
 
 
@@ -108,7 +119,7 @@ def read_stamp(text: str) -> Stamp | None:
     if not blk:
         return None
     m = STAMP_RE.search(blk)
-    return Stamp(m.group(1), m.group(2), m.group(3)) if m else None
+    return Stamp(m.group(1), m.group(2), m.group(3), m.group(4)) if m else None
 
 
 def body_of(block: str) -> str:
@@ -131,15 +142,16 @@ def upsert_block(text: str, block: str) -> str:
     return text.rstrip() + "\n\n" + block.strip() + "\n"
 
 
-def set_stamp(text: str, src: str, at: str | None = None) -> str:
+def set_stamp(text: str, src: str, at: str | None = None, head: str | None = None) -> str:
     """只改指纹戳，正文一字不动。块不存在时插入默认空块。"""
     at = at or now_stamp()
     blk = read_block(text)
     if not blk:
-        return upsert_block(text, default_block(src, at))
+        return upsert_block(text, default_block(src, at, head))
     body = body_of(blk)
     bh = hashlib.sha256(body.encode("utf-8")).hexdigest()[:12]
-    new_line = f"<!-- projstate:stamp src={src} body={bh} at={at} -->"
+    fields = f"src={src} body={bh}" + (f" head={head}" if head else "") + f" at={at}"
+    new_line = f"<!-- projstate:stamp {fields} -->"
     if STAMP_RE.search(blk):
         new_blk = STAMP_RE.sub(new_line, blk, count=1)
     else:
@@ -172,3 +184,42 @@ def read_agents(root: Path) -> str:
 
 def write_agents(root: Path, text: str) -> None:
     (root / AGENTS_FILE).write_text(text, encoding="utf-8")
+
+
+KEY_FILES_HEAD = "- 关键文件："
+DECISIONS_HEAD = "- 已定决策（写出依据，别只写结论）："
+PITFALLS_HEAD = "- 坑 / 注意："
+DECISION_HINT = "（待补：为什么这么改？放弃了什么备选？）"
+PITFALL_HINT = "（待补：环境 / 依赖 / 第一次踩的坑）"
+
+
+def _is_empty(line: str, head: str) -> bool:
+    return line.strip() == head or line.strip() == head.rstrip("：" ) + "："
+
+
+def fill_draft(body: str, file_lines: list[str]) -> str:
+    """把草稿行填进"关键文件"，给空着的"已定决策/坑"放待补占位。
+
+    只填空位与追加：人/agent 已经写过的行一字不动。
+    """
+    out: list[str] = []
+    filled_key = False
+    for ln in body.splitlines():
+        out.append(ln)
+        stripped = ln.strip()
+        if not filled_key and stripped.startswith("- 关键文件"):
+            filled_key = True
+            for cand in file_lines:
+                rel = cand.split("`")[1] if "`" in cand else cand
+                if rel in body:          # 已经写过这个文件，不重复
+                    continue
+                out.append(cand)
+        elif _is_empty(ln, DECISIONS_HEAD):
+            out.append(f"  - {DECISION_HINT}")
+        elif _is_empty(ln, PITFALLS_HEAD):
+            out.append(f"  - {PITFALL_HINT}")
+    if not filled_key and file_lines:
+        out.append("")
+        out.append(KEY_FILES_HEAD)
+        out.extend(file_lines)
+    return "\n".join(out)
