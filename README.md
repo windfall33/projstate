@@ -27,8 +27,9 @@
 | `projstate brief` | 打印交接单 + 是否过期 |
 | `projstate brief stamp` | 只更新交接单的源码指纹戳（正文不动） |
 | `projstate brief check` | **单一职责的退出码**：交接单过期=1，否则=0（不受其它体检项影响） |
-| `projstate hook install` | 把 `brief check` 挂到 git `pre-commit`（交接单过期就挡住提交） |
-| `projstate hook uninstall` | 卸掉上面那个钩子（只删本工具装的） |
+| `projstate hook install` | 默认挂到 git `pre-commit`（交接单过期就挡住提交） |
+| `projstate hook install --target claude` | 挂到 Claude Code 的 **Stop 钩子**（退出码 2 = 阻塞停止并把原因打回给模型） |
+| `projstate hook uninstall [--target …]` | 卸掉对应钩子（只删本工具装的，别人的配置一字不动） |
 | `projstate log <text>` | 追加一行到 `.ai/STATE.md` |
 | `projstate status` | 打印任务状态 |
 | `projstate refresh` | 增量刷新事实层+卫生层+渲染 AGENTS.md 块 |
@@ -62,6 +63,13 @@
 - **正文动过就不算过期**：人或 agent 更新了交接单、只是忘了跑 `brief stamp`，这时不能判过期
   —— 验收实验里，被误判的 agent 直接改用 `git commit --no-verify` 绕过了钩子。`brief stamp`
   只用于把戳对齐（此后正文再不动才会重新判过期）。
+- **两个强制点，分工不同**：`pre-commit` 只在能写 `.git` 的环境里有效——Codex 的
+  `workspace-write` 沙箱对 `.git` 是 DENY，agent 连 `git add` 都做不了，钩子根本到不了；
+  Claude Code 的 Stop 钩子在沙箱里也能触发，且退出码 2 会把原因打回给模型让它继续。
+  实测：装了 Stop 钩子 + pre-commit 后，agent 会在被挡住时**把交接单正文写好、盖章，
+  再和代码一起提交**（提交信息里自己写明"因 pre-commit 钩子要求一并更新"）。
+- `.claude/`、`.codex/` 属于 agent 工具状态，不进事实层，也不进源码指纹——否则"装钩子"
+  这个动作本身就会把交接单判成过期（装完第一个提交就被自己挡住）。
 - **`check` 会扫一遍全仓来算指纹**：小仓毫秒级，django（27 MB 源码）约 0.2 s，
   kubernetes（248 MB 源码）约数秒。挂在 `pre-commit` 上时要有这个预算。
 - **没有 `AGENTS.md` 时 `init`/`refresh` 会创建它**（只含交接单块）。旧版本是"提示即可、

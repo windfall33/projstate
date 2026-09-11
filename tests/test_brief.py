@@ -8,6 +8,7 @@
 """
 
 from pathlib import Path
+import json
 
 from projstate import brief
 from projstate.cli import main
@@ -173,3 +174,59 @@ def test_brief_check_is_single_purpose(tmp_path, monkeypatch, capsys):
     capsys.readouterr()
     assert main(["brief", "check"]) == 1
     assert "交接单已过期" in capsys.readouterr().err
+
+
+def _stop_entries() -> list:
+    p = Path(".claude") / "settings.json"
+    return ((json.loads(p.read_text(encoding="utf-8")).get("hooks") or {}).get("Stop") or [])
+
+
+def test_claude_stop_hook_install_merge_uninstall(tmp_path, monkeypatch, capsys):
+    """Claude Stop 钩子：幂等安装、不破坏别人的配置、只删自己那条。"""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".claude").mkdir()
+    (tmp_path / ".claude" / "settings.json").write_text(
+        json.dumps({"permissions": {"defaultMode": "auto"},
+                    "hooks": {"Stop": [{"hooks": [{"type": "command", "command": "echo 别人的"}]}]}},
+                   ensure_ascii=False),
+        encoding="utf-8")
+
+    assert main(["hook", "install", "--target", "claude"]) == 0
+    entries = _stop_entries()
+    assert len(entries) == 2, "应追加自己的条目，不动别人的"
+    assert "exit 2" in entries[-1]["hooks"][0]["command"], "Stop 钩子必须用退出码 2 阻塞"
+
+    capsys.readouterr()
+    assert main(["hook", "install", "--target", "claude"]) == 0
+    assert "已存在" in capsys.readouterr().out
+    assert len(_stop_entries()) == 2, "重复安装必须幂等"
+
+    assert main(["hook", "uninstall", "--target", "claude"]) == 0
+    entries = _stop_entries()
+    assert len(entries) == 1 and entries[0]["hooks"][0]["command"] == "echo 别人的"
+    settings = json.loads((tmp_path / ".claude" / "settings.json").read_text(encoding="utf-8"))
+    assert settings["permissions"] == {"defaultMode": "auto"}, "别人的配置字段要留着"
+
+
+def test_claude_stop_hook_created_and_removed_with_file(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    assert main(["hook", "install", "--target", "claude"]) == 0
+    assert (tmp_path / ".claude" / "settings.json").is_file()
+    assert len(_stop_entries()) == 1
+    assert main(["hook", "uninstall", "--target", "claude"]) == 0
+    assert not (tmp_path / ".claude" / "settings.json").exists(), "只剩空壳时删掉文件"
+
+
+def test_writing_agent_config_does_not_stale_the_brief(tmp_path, monkeypatch, capsys):
+    """装钩子会写 .claude/settings.json；它不能被算进源码指纹，
+    否则刚接入就把自己的交接单判成过期（装完第一个提交就被自己挡住）。"""
+    monkeypatch.chdir(tmp_path)
+    _mk(tmp_path)
+    assert main(["init"]) == 0
+    assert main(["refresh"]) == 0
+    capsys.readouterr()
+    assert main(["brief", "check"]) == 0
+
+    assert main(["hook", "install", "--target", "claude"]) == 0
+    capsys.readouterr()
+    assert main(["brief", "check"]) == 0, "写 agent 配置不该让交接单过期"

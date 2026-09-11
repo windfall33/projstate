@@ -227,10 +227,103 @@ HOOK_BODY = (
     "# projstate:end\n"
 )
 
+# agent 侧强制点：Claude Code 的 Stop 钩子。退出码 2 = 阻塞停止 + 把 stderr 打回给模型，
+# 所以这里必须 `|| exit 2` —— `check` 自己用 1 表意"过期"，两者语义分开。
+CLAUDE_HOOK_CMD = "python -m projstate.cli brief check || exit 2"
+CLAUDE_SETTINGS = Path(".claude") / "settings.json"
 
-def cmd_hook(root: Path, action: str) -> int:
-    """把 `check` 挂到 git pre-commit 上：交接单过期就挡住提交。"""
+
+def _is_our_hook(cmd: str) -> bool:
+    """认出本工具写的钩子：命令里既提到 projstate，又是 brief check。
+
+    不用精确串比较——用户可能用控制台脚本 `projstate brief check`，也可能用
+    `python -m projstate.cli brief check`，两者都要能被识别、去重和卸载。
+    """
+    c = str(cmd or "")
+    return "projstate" in c and "brief check" in c
+
+
+def _claude_settings(root: Path) -> tuple[dict, bool]:
+    """读 .claude/settings.json。返回 (数据, 文件是否存在)。内容坏掉就当没有。"""
+    p = root / CLAUDE_SETTINGS
+    if not p.is_file():
+        return {}, False
+    try:
+        data = json.loads(p.read_text(encoding="utf-8") or "{}")
+    except json.JSONDecodeError:
+        return {}, True
+    return (data if isinstance(data, dict) else {}), True
+
+
+def _claude_hook_index(data: dict) -> tuple[list, int]:
+    """返回 (Stop 条目列表, 本工具那条的下标)；没有则下标 -1。"""
+    entries = ((data.get("hooks") or {}).get("Stop") or [])
+    if not isinstance(entries, list):
+        return [], -1
+    for i, e in enumerate(entries):
+        for h in (e.get("hooks") or []) if isinstance(e, dict) else []:
+            if isinstance(h, dict) and _is_our_hook(h.get("command", "")):
+                return entries, i
+    return entries, -1
+
+
+def _write_settings(root: Path, data: dict) -> None:
+    p = root / CLAUDE_SETTINGS
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+def cmd_hook(root: Path, action: str, target: str = "git") -> int:
+    """把"交接单过期"挂到两个强制点上。
+
+    - `git`：pre-commit（非零即挡提交）。只在能写 .git 的环境里有效。
+    - `claude`：Claude Code 的 Stop 钩子（退出码 2 = 阻塞停止并打回给模型）。
+      这是沙箱里也到得了的强制点——实测 `-p` 模式下会触发，且 exit 2 会让 agent 继续。
+    """
     import os
+
+    if target == "claude":
+        data, existed = _claude_settings(root)
+        entries, idx = _claude_hook_index(data)
+        if action == "status":
+            print(f"[projstate] Claude Stop 钩子：{'已安装' if idx >= 0 else '未安装'}"
+                  f"（{root / CLAUDE_SETTINGS}）")
+            return 0
+        if action == "install":
+            if idx >= 0:
+                print("[projstate] Claude Stop 钩子已存在，未改动")
+                return 0
+            entries.append({"hooks": [{"type": "command", "command": CLAUDE_HOOK_CMD}]})
+            data.setdefault("hooks", {})["Stop"] = entries
+            _write_settings(root, data)
+            print(f"[projstate] 已安装 Claude Stop 钩子：{root / CLAUDE_SETTINGS}")
+            if not existed:
+                print("[projstate] 该文件原本不存在，是本工具创建的（可进 git 共享）")
+            return 0
+        if action == "uninstall":
+            if idx < 0:
+                print("[projstate] 没有本工具装的 Claude Stop 钩子，无需卸载")
+                return 0
+            entries.pop(idx)
+            hooks = data.get("hooks") or {}
+            if entries:
+                hooks["Stop"] = entries
+            else:
+                hooks.pop("Stop", None)
+            if hooks:
+                data["hooks"] = hooks
+            else:
+                data.pop("hooks", None)
+            if not data and existed:
+                (root / CLAUDE_SETTINGS).unlink()
+                print("[projstate] 设置文件只剩空壳，已删除")
+            else:
+                _write_settings(root, data)
+                print("[projstate] 已卸载 Claude Stop 钩子")
+            return 0
+        print("[projstate] 用法：projstate hook [status|install|uninstall] [--target git|claude]",
+              file=sys.stderr)
+        return 2
 
     if not (root / ".git").is_dir():
         print("[projstate] 不是 git 仓库，装不了钩子", file=sys.stderr)
@@ -453,6 +546,8 @@ def main(argv: list[str] | None = None) -> int:
     p_hk = sub.add_parser("hook")
     p_hk.add_argument("action", nargs="?", default="status",
                       choices=["status", "install", "uninstall"])
+    p_hk.add_argument("--target", default="git", choices=["git", "claude"],
+                      help="git=pre-commit（默认）；claude=Claude Code 的 Stop 钩子")
     sub.add_parser("archive")
     sub.add_parser("restore")
 
@@ -487,7 +582,7 @@ def main(argv: list[str] | None = None) -> int:
     if cmd == "brief":
         return cmd_brief(root, args.action)
     if cmd == "hook":
-        return cmd_hook(root, args.action)
+        return cmd_hook(root, args.action, args.target)
     if cmd in ("archive", "restore"):
         print("[projstate] archive/restore 需二次确认，v1 预留", file=sys.stderr)
         return 1

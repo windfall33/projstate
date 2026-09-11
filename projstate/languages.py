@@ -19,6 +19,9 @@ GENERATED_DIRS: frozenset[str] = frozenset(
         ".venv", "venv", "__pycache__", ".git", ".ai", ".cache",
         ".mypy_cache", ".pytest_cache", "coverage", "resources",
         ".build-src",
+        # agent 工具自己的状态目录：不是项目事实，而且工具会往里写文件——
+        # 算进源码指纹会导致"刚装完钩子就把自己的交接单判成过期"。
+        ".claude", ".codex",
     }
 )
 
