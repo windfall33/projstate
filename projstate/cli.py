@@ -3,20 +3,14 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import sys
 from pathlib import Path
 
+from projstate import brief
 from projstate.facts import build_map, find_unresolved
 from projstate.languages import is_generated
-from projstate.render import (
-    BEGIN_MARKER,
-    END_MARKER,
-    render_agents_block,
-    render_hip,
-    render_map,
-)
+from projstate.render import render_hip, render_map
 from projstate.scan import iter_files, load_ignore, rel_posix
 from projstate.stale import group_candidates, elect
 from projstate.state.store import append_state, read_state
@@ -31,13 +25,6 @@ def _write_json(path: Path, obj: object) -> None:
     path.write_text(json.dumps(obj, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-def _replace_block(text: str, block: str) -> str:
-    """用新的块替换 AGENTS.md 里旧的 projstate 块；无块则追加。"""
-    if BEGIN_MARKER not in text or END_MARKER not in text:
-        return text.rstrip() + "\n\n" + block
-    start = text.index(BEGIN_MARKER)
-    end = text.index(END_MARKER) + len(END_MARKER)
-    return text[:start] + block.strip() + text[end:]
 
 
 def _git_tracked(root: Path) -> set[str]:
@@ -103,7 +90,7 @@ def cmd_refresh(root: Path) -> int:
         for d in _top_dirs(root)
         if is_generated(rel_posix(root, d))
     })
-    site = {"name": root.name, "fingerprint": _fingerprint(files), "count": len(files)}
+    site = {"name": root.name, "fingerprint": brief.fingerprint_files(files), "count": len(files)}
 
     _write_json(ai / "map.json", {"files": map_data})
     _write_json(ai / "unresolved.json", unresolved)
@@ -111,17 +98,10 @@ def cmd_refresh(root: Path) -> int:
     (ai / "HIP.md").write_text(render_hip(findings, generated), encoding="utf-8")
     _write_json(ai / "stale.json", [_finding_dict(f) for f in findings])
 
-    # 写 AGENTS.md 标记块
-    agents = root / "AGENTS.md"
-    if not agents.is_file():
-        print("[projstate] 未发现 AGENTS.md，可运行 init 接入", file=sys.stderr)
-    else:
-        block = render_agents_block({
-            "task": _read_task(root),
-            "next": _read_next(root),
-            "count": len(files),
-        })
-        agents.write_text(_replace_block(agents.read_text(encoding="utf-8"), block), encoding="utf-8")
+    # 确保交接单块存在（已有正文不动 —— 那是人/agent 写的东西）
+    what = _ensure_brief(root, files)
+    if what == "created":
+        print(f"[projstate] 未发现 AGENTS.md，已创建只含交接单的 {brief.AGENTS_FILE}", file=sys.stderr)
     print(f"[projstate] refresh 完成：{len(files)} 候选，{len(findings)} 组旧版判定")
     return 0
 
@@ -174,7 +154,117 @@ def cmd_check(root: Path) -> int:
         if entries:
             print(f"[projstate] {len(entries)} 组旧版判定待处理")
             dirty = True
+
+    # 交接单是否过期：源码改了但交接单没跟上 —— 这正是"换窗口后读到过期认知"的入口。
+    text = brief.read_agents(root)
+    if brief.read_block(text) is None:
+        print(f"[projstate] 未接入交接单：{brief.AGENTS_FILE} 里没有 projstate 块（init/refresh 可补）")
+    else:
+        files = list(iter_files(root, ignore=load_ignore(root)))
+        if brief.is_stale(text, brief.fingerprint_files(files)):
+            st = brief.read_stamp(text)
+            print("[projstate] 交接单已过期：源码在 "
+                  f"{st.at if st else '?'} 之后被改过（交接单正文没动）。"
+                  f"请更新 {brief.AGENTS_FILE} 的交接单，"
+                  "然后 `projstate brief stamp`")
+            dirty = True
     return 1 if dirty else 0
+
+
+def cmd_brief(root: Path, action: str) -> int:
+    """交接单：`show` 打印当前块，`stamp` 只更新指纹戳（正文不动）。
+
+    写正文请直接改 AGENTS.md 的块——agent 改 markdown 比学一套新参数可靠。
+    """
+    text = brief.read_agents(root)
+    if action == "show":
+        blk = brief.read_block(text)
+        if blk is None:
+            print(f"[projstate] {brief.AGENTS_FILE} 里没有交接单块，先跑 init 或 refresh",
+                  file=sys.stderr)
+            return 1
+        st = brief.read_stamp(text)
+        print(blk)
+        if st:
+            files = list(iter_files(root, ignore=load_ignore(root)))
+            flag = "已过期" if brief.is_stale(text, brief.fingerprint_files(files)) else "最新"
+            print(f"[projstate] 交接单状态：{flag}（盖章于 {st.at}）")
+        return 0
+    if action == "stamp":
+        files = list(iter_files(root, ignore=load_ignore(root)))
+        src = brief.fingerprint_files(files)
+        had = brief.read_block(text) is not None
+        brief.write_agents(root, brief.set_stamp(text, src))
+        print(f"[projstate] 交接单已盖章：src={src} at={brief.now_stamp()}"
+              + ("" if had else f"（原无块，已新建于 {brief.AGENTS_FILE}）"))
+        return 0
+    if action == "check":
+        # 单一职责的退出码：只回答"交接单过期没有"，不管旧版判定等其它体检项。
+        # pre-commit 必须用这个，否则有未确认版本组的仓库会连提交都被挡住。
+        if brief.read_block(text) is None:
+            print(f"[projstate] {brief.AGENTS_FILE} 里没有交接单块，先跑 init 或 refresh",
+                  file=sys.stderr)
+            return 1
+        files = list(iter_files(root, ignore=load_ignore(root)))
+        if brief.is_stale(text, brief.fingerprint_files(files)):
+            st = brief.read_stamp(text)
+            print("[projstate] 交接单已过期：源码在 "
+                  f"{st.at if st else '?'} 之后被改过（交接单正文没动）。"
+                  f"更新 {brief.AGENTS_FILE} 的交接单后跑 "
+                  "`projstate brief stamp`", file=sys.stderr)
+            return 1
+        return 0
+    print("[projstate] 用法：projstate brief [show|stamp|check]", file=sys.stderr)
+    return 2
+
+
+HOOK_BEGIN = "# projstate:begin"
+HOOK_BODY = (
+    "#!/bin/sh\n"
+    "# projstate:begin（由 projstate hook install 写入，勿手改）\n"
+    "if command -v python >/dev/null 2>&1; then PY=python; else PY=python3; fi\n"
+    '"$PY" -m projstate.cli brief check || exit 1\n'
+    "# projstate:end\n"
+)
+
+
+def cmd_hook(root: Path, action: str) -> int:
+    """把 `check` 挂到 git pre-commit 上：交接单过期就挡住提交。"""
+    import os
+
+    if not (root / ".git").is_dir():
+        print("[projstate] 不是 git 仓库，装不了钩子", file=sys.stderr)
+        return 1
+    target = root / ".git" / "hooks" / "pre-commit"
+    old = target.read_text(encoding="utf-8", errors="replace") if target.is_file() else ""
+
+    if action == "status":
+        print(f"[projstate] pre-commit：{'已安装' if HOOK_BEGIN in old else ('存在但不是本工具装的' if old else '未安装')}")
+        return 0
+    if action == "install":
+        if old and HOOK_BEGIN not in old:
+            print(f"[projstate] {target} 已存在且不是本工具装的，未改动", file=sys.stderr)
+            return 1
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(HOOK_BODY, encoding="utf-8")
+        try:
+            os.chmod(target, 0o755)
+        except OSError:
+            pass
+        print(f"[projstate] 已安装 pre-commit：{target}")
+        return 0
+    if action == "uninstall":
+        if not old:
+            print("[projstate] 没有 pre-commit 钩子，无需卸载")
+            return 0
+        if HOOK_BEGIN not in old:
+            print(f"[projstate] {target} 不是本工具装的，未改动", file=sys.stderr)
+            return 1
+        target.unlink()
+        print("[projstate] 已卸载 pre-commit")
+        return 0
+    print("[projstate] 用法：projstate hook [status|install|uninstall]", file=sys.stderr)
+    return 2
 
 
 def cmd_explain(root: Path, path: str) -> int:
@@ -277,7 +367,12 @@ def cmd_selftest() -> int:
 
 
 def cmd_init(root: Path) -> int:
-    """接入当前项目：建 .ai/、初始化 STATE.md、把标记块写入 AGENTS.md。"""
+    """接入当前项目：建 .ai/、初始化 STATE.md、确保 AGENTS.md 里有交接单块。
+
+    与 v0.1 的差别：不再因为"没有 AGENTS.md"就放弃接入。交接单的载体就是 AGENTS.md，
+    没有就创建一个只含交接单的文件并说明（第四轮实测：6 个真实仓库里 5 个没有它，
+    旧行为等于工具装上了但没有任何入口）。已有正文一字不动。
+    """
     from projstate.state.store import STATE_FILE, template
 
     ai = root / ".ai"
@@ -286,19 +381,36 @@ def cmd_init(root: Path) -> int:
     if not state.is_file():
         state.write_text(template(), encoding="utf-8")
         print(f"[projstate] 已创建 {state}")
-    agents = root / "AGENTS.md"
-    if not agents.is_file():
-        # 不擅自创建 AGENTS.md（尊重用户入口文件体系），提示即可
-        print("[projstate] 未发现 AGENTS.md，未接入。请创建 AGENTS.md 后重跑 init")
-        return 0
-    block = render_agents_block({
-        "task": _read_task(root),
-        "next": _read_next(root),
-        "count": 0,
-    })
-    agents.write_text(_replace_block(agents.read_text(encoding="utf-8"), block), encoding="utf-8")
-    print(f"[projstate] 已将标记块写入 {agents}")
+
+    what = _ensure_brief(root)
+    if what == "created":
+        print(f"[projstate] 未发现 AGENTS.md，已创建只含交接单的 {brief.AGENTS_FILE}")
+    elif what == "inserted":
+        print(f"[projstate] 已在 {brief.AGENTS_FILE} 里插入交接单块")
+    else:
+        print(f"[projstate] {brief.AGENTS_FILE} 里已有交接单块，正文未改动")
+    print(f"[projstate] 下一步：填 {brief.AGENTS_FILE} 的交接单，然后 `projstate brief stamp`")
     return 0
+
+
+def _ensure_brief(root: Path, files: list[Path] | None = None) -> str:
+    """确保 AGENTS.md 里有交接单块。返回 created / inserted / kept。
+
+    只在"没有文件"或"没有块"时写；已有块的正文一字不动（改的是人与 agent，不是我）。
+    """
+    agents = root / brief.AGENTS_FILE
+    existed = agents.is_file()
+    text = brief.read_agents(root)
+    if files is None:
+        files = list(iter_files(root, ignore=load_ignore(root)))
+    src = brief.fingerprint_files(files)
+    if brief.read_block(text) is None:
+        brief.write_agents(root, brief.upsert_block(text, brief.default_block(src)))
+        return "inserted" if existed else "created"
+    if brief.read_stamp(text) is None:
+        # 历史版本的块没有指纹戳：补戳，正文不动
+        brief.write_agents(root, brief.set_stamp(text, src))
+    return "kept"
 
 
 def _top_dirs(root: Path) -> list[Path]:
@@ -307,16 +419,6 @@ def _top_dirs(root: Path) -> list[Path]:
         return [p for p in root.iterdir() if p.is_dir()]
     except OSError:
         return []
-
-
-def _fingerprint(files: list[Path]) -> str:
-    h = hashlib.sha256()
-    for f in sorted(files):
-        try:
-            h.update(f.read_bytes())
-        except OSError:
-            continue
-    return h.hexdigest()[:8]
 
 
 def _finding_dict(f) -> dict:
@@ -329,57 +431,6 @@ def _finding_dict(f) -> dict:
         "signals": f.signals,
         "suggestion": f.suggestion,
     }
-
-
-def _read_task(root: Path) -> str:
-    lines = read_state(root).splitlines()
-    for i, line in enumerate(lines):
-        if line.startswith("# 当前任务"):
-            tail = line.replace("# 当前任务", "").strip(" #:：-")
-            if tail:
-                return tail
-            # 标题行本身为空，取标题后第一个非空、非小标题、非占位的内容
-            for nxt in lines[i + 1:]:
-                s = nxt.strip()
-                if s and not s.startswith("##"):
-                    return s
-            break
-    # 不读"下一步"分组：任务名与下一步是两回事，避免错位
-    return "未记录"
-
-
-def _read_next(root: Path) -> str:
-    lines = read_state(root).splitlines()
-    for entry in _section_lines(lines, "下一步"):
-        s = entry.strip()
-        if s.startswith("- "):
-            return _strip_date_prefix(s[2:]) or "见 .ai/STATE.md"
-        if s and not s.startswith("##") and not s.startswith("*"):
-            return s
-    return "见 .ai/STATE.md"
-
-
-def _section_lines(lines: list[str], section: str) -> list[str]:
-    """返回某个 `## <section>` 分组下的内容行（不含其它小标题）。"""
-    result: list[str] = []
-    capture = False
-    for ln in lines:
-        stripped = ln.strip()
-        if stripped == f"## {section}":
-            capture = True
-            continue
-        if capture and stripped.startswith("##"):
-            break
-        if capture:
-            result.append(ln)
-    return result
-
-
-def _strip_date_prefix(text: str) -> str:
-    """去掉 log 行开头的 `YYYY-MM-DD ` 前缀。"""
-    import re
-
-    return re.sub(r"^\d{4}-\d{2}-\d{2}\s*", "", text).strip()
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -396,6 +447,12 @@ def main(argv: list[str] | None = None) -> int:
     p_wy = sub.add_parser("why"); p_wy.add_argument("path")
     p_re = sub.add_parser("resolve"); p_re.add_argument("path")
     sub.add_parser("init")
+    p_br = sub.add_parser("brief")
+    p_br.add_argument("action", nargs="?", default="show",
+                      choices=["show", "stamp", "check"])
+    p_hk = sub.add_parser("hook")
+    p_hk.add_argument("action", nargs="?", default="status",
+                      choices=["status", "install", "uninstall"])
     sub.add_parser("archive")
     sub.add_parser("restore")
 
@@ -427,6 +484,10 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_selftest()
     if cmd == "init":
         return cmd_init(root)
+    if cmd == "brief":
+        return cmd_brief(root, args.action)
+    if cmd == "hook":
+        return cmd_hook(root, args.action)
     if cmd in ("archive", "restore"):
         print("[projstate] archive/restore 需二次确认，v1 预留", file=sys.stderr)
         return 1

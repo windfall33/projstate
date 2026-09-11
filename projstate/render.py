@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-BEGIN_MARKER = "<!-- projstate:begin 自动生成，勿手改 -->"
-END_MARKER = "<!-- projstate:end -->"
+# agent 规则文件（扫描时排除，也是交接单的载体；块标记见 brief.py）。
+AGENTS_FILE = "AGENTS.md"
 
 # ambiguous 组超过此阈值时，产物不逐行列全部候选（避免退化成"我不知道"清单），改为聚合。
 AMBIGUOUS_DETAIL_LIMIT = 20
@@ -101,16 +101,4 @@ def render_hip(findings: list, generated: list[str]) -> str:
         lines.append(f"")
     if not findings:
         lines.append(f"无旧版判定。")
-    return "\n".join(lines) + "\n"
-
-
-def render_agents_block(summary: dict) -> str:
-    """AGENTS.md 标记块（一页速览）。工具只写块内，块外一字不动。"""
-    lines: list[str] = []
-    lines.append(BEGIN_MARKER)
-    lines.append(f"任务：{summary.get('task','未记录')} · 下一步：{summary.get('next','见 .ai/STATE.md')} · 候选 {summary.get('count',0)} 文件")
-    lines.append(f"")
-    lines.append(f"用法：改文件前 `projstate explain <path>`；查现行版 `projstate canonical <名>`；查卫生 `projstate check`")
-    lines.append(f"完整地图：`.ai/MAP.md` · 完整卫生：`.ai/HIP.md`")
-    lines.append(END_MARKER)
     return "\n".join(lines) + "\n"

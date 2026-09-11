@@ -33,7 +33,7 @@ def append_state(root: Path, text: str) -> str:
     """把一行 `- <日期> <text>` 写入 STATE.md 的"下一步"分组，返回该行。
 
     写入"下一步"而非文件末尾：log 的含义是"有了新进展/下一步计划"，
-    这样换窗口 `status` 时新的进展直接浮现在顶部，`_read_next` 也能读到。
+    这样换窗口 `status` 时新的进展直接浮现在顶部。
     """
     now = datetime.date.today().isoformat()
     line = f"- {now} {text.strip()}"

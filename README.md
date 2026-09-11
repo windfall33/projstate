@@ -1,22 +1,34 @@
 # projstate
 
-零三方依赖、零模型的"项目状态与阅读锚点"。把项目记忆落盘为三层：
-状态层（`.ai/STATE.md`，人写）、事实层（`.ai/map.json` + `MAP.md`）、卫生层（`.ai/HIP.md` + `stale.json`）。
-任何窗口/任何 agent 开工先读，不再重读全仓，不再把旧文件当现行版。
+零三方依赖、零模型的"项目状态与阅读锚点"。落盘为四样东西：
+
+**交接单**（`AGENTS.md` 里的受保护块，人/agent 写）、状态层（`.ai/STATE.md`）、
+事实层（`.ai/map.json` + `MAP.md`）、卫生层（`.ai/HIP.md` + `stale.json`）。
+
+为什么交接单写在 `AGENTS.md` 而不是 `.ai/`：Codex 与 Claude Code 都会把 `AGENTS.md`
+**自动注入上下文**，而 `.ai/` 需要 agent 额外读一次。第四轮实测里，没有 AGENTS.md 的仓库
+（6 个真实开源仓库里的 5 个）中，agent 全程 0 次访问 `.ai/` —— 工具装上了但没有入口。
+所以正文放进一定会被读到的文件，`.ai/` 只放机器产物。
 
 ## 痛点 → 产物
 
 | 痛点 | 产物 | 用法 |
 |---|---|---|
-| 重开窗口/换 agent 重读全仓 | `.ai/STATE.md` | `projstate log "完成X，下一步Y"`；换窗口 `projstate status` |
+| 重开窗口/换 agent 重读全仓 | `AGENTS.md` 交接单块 | 开工先读块；收工更新块 + `projstate brief stamp` |
 | 精读漏重点、反复读漂移 | `.ai/MAP.md` | 开工读"入口/关键文件/改X读什么" |
 | 旧文件当现行版 | `.ai/HIP.md` | 读"现行版对照+勿读清单" |
+| 交接单本身过期（改了代码没更新） | `projstate check` | 退出码 ≠ 0，提示"交接单已过期" |
 
 ## 命令
 
 | 命令 | 作用 |
 |---|---|
-| `projstate init` | 接入当前项目（写 AGENTS.md 标记块，需确认） |
+| `projstate init` | 接入当前项目：建 `.ai/`，**没有 `AGENTS.md` 就创建一个只含交接单的** |
+| `projstate brief` | 打印交接单 + 是否过期 |
+| `projstate brief stamp` | 只更新交接单的源码指纹戳（正文不动） |
+| `projstate brief check` | **单一职责的退出码**：交接单过期=1，否则=0（不受其它体检项影响） |
+| `projstate hook install` | 把 `brief check` 挂到 git `pre-commit`（交接单过期就挡住提交） |
+| `projstate hook uninstall` | 卸掉上面那个钩子（只删本工具装的） |
 | `projstate log <text>` | 追加一行到 `.ai/STATE.md` |
 | `projstate status` | 打印任务状态 |
 | `projstate refresh` | 增量刷新事实层+卫生层+渲染 AGENTS.md 块 |
@@ -44,6 +56,16 @@
   `canonical_overrides.json`，后续所有窗口/agent 直接读到确定判定，不再重复面对同一个不确定判断。
   这正对应"昂贵的判断要跨窗口持久化"，避免每个新窗口重新猜测（痛点二的漂移来源）。
 - "职责描述"为机械推断，标 `（推断）`；引用计数/入口/git 为 `（确证）`。
+- **交接单是"人写"，工具不推断语义。** `check` 只回答一个安全的问题：**源码变了，而交接单
+  正文自上次盖章后一个字没动**吗（比对全仓内容指纹 + 正文指纹，与 mtime 无关，所以
+  `git clone` 不会误报）。它**不判断**交接单写得对不对、有没有漏。
+- **正文动过就不算过期**：人或 agent 更新了交接单、只是忘了跑 `brief stamp`，这时不能判过期
+  —— 验收实验里，被误判的 agent 直接改用 `git commit --no-verify` 绕过了钩子。`brief stamp`
+  只用于把戳对齐（此后正文再不动才会重新判过期）。
+- **`check` 会扫一遍全仓来算指纹**：小仓毫秒级，django（27 MB 源码）约 0.2 s，
+  kubernetes（248 MB 源码）约数秒。挂在 `pre-commit` 上时要有这个预算。
+- **没有 `AGENTS.md` 时 `init`/`refresh` 会创建它**（只含交接单块）。旧版本是"提示即可、
+  不接入"，实测那等于没接入：真实仓库里 5/6 没有 AGENTS.md。块外内容一字不动。
 - **map.json 幂等**：扫描排除根级 agent 规则文件（`AGENTS.md`/`CLAUDE.md`/`GEMINI.md`）——
   它们是工具改写的入口，不是项目源码事实，排除后每次 `refresh` 不产生自指的无意义 diff。
 - **ambiguous 产物按阈值聚合**：超过 20 组待确认时，HIP.md / MAP.md 不逐行列全部候选，
@@ -55,6 +77,14 @@
 
 零三方依赖（Python 标准库）。设计上借鉴 codegraph / Understand Anything 的局部可验证思路，
 但不复制第三方代码；两者 LICENSE 已核实均为 MIT。若不复制代码，无版权义务。
+
+交接单这一层的**模式**来源（第四轮复用闸门：只借模式，不引代码、不引依赖）：
+`adrrr/persistent-handoff`（"always the same file, re-read at every session start"）、
+`hyamie/claude-code-starter-kit`（`/continue` + `/done`）、
+`kskdotdot/to-the-next-session`（跨会话/跨机器的任务交接文件）、
+`RRFRRF/project-memory-skill`（Markdown 形式的跨会话状态 + handoff）。
+它们都是 Claude Code 专属的 agent 侧 skill 且体量很小；引入会与"零依赖 + 工具无关 +
+产物进 git"冲突，因此只采纳模式，代码全部自写。
 
 ## `.ai/` 的 git 策略
 

@@ -1,4 +1,4 @@
-from projstate.render import render_agents_block, render_hip, render_map
+from projstate.render import render_hip, render_map
 from projstate.stale import StaleFinding
 
 
@@ -24,13 +24,6 @@ def test_render_hip_flags_superseded():
     assert "src/export_v1.js" in out
     assert "勿读" in out
     assert "dist2/" in out
-
-
-def test_render_agents_block_small():
-    out = render_agents_block({"task": "导出重构", "next": "改验证逻辑", "count": 10})
-    assert "<!-- projstate:begin" in out
-    assert "导出重构" in out
-    assert "<!-- projstate:end" in out
 
 
 def test_render_hip_no_none_and_lists_ambiguous():
