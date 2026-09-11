@@ -110,16 +110,18 @@ def cmd_refresh(root: Path) -> int:
     })
     site = {"name": root.name, "fingerprint": _fingerprint(files), "count": len(files)}
 
-    _write_json(ai / "map.json", {"files": map_data})
-    _write_json(ai / "unresolved.json", unresolved)
-    (ai / "MAP.md").write_text(render_map(map_data, findings, site), encoding="utf-8")
-    (ai / "HIP.md").write_text(render_hip(findings, generated), encoding="utf-8")
-    _write_json(ai / "stale.json", [_finding_dict(f) for f in findings])
-
     # 状态层复核：STATE.md 里结论的依赖若已变更，就地标出
     from projstate import statedeps
 
     stale_lines = statedeps.annotate(root)
+    # 文档层复核：AGENTS.md / README.md / docs 里断言的依赖
+    stale_docs, _ = statedeps.scan_docs(root)
+
+    _write_json(ai / "map.json", {"files": map_data})
+    _write_json(ai / "unresolved.json", unresolved)
+    (ai / "MAP.md").write_text(render_map(map_data, findings, site), encoding="utf-8")
+    (ai / "HIP.md").write_text(render_hip(findings, generated, stale_docs), encoding="utf-8")
+    _write_json(ai / "stale.json", [_finding_dict(f) for f in findings])
 
     # 写 AGENTS.md 标记块
     agents = root / "AGENTS.md"
@@ -131,6 +133,7 @@ def cmd_refresh(root: Path) -> int:
             "next": _read_next(root),
             "count": len(files),
             "stale": stale_lines,
+            "stale_docs": stale_docs,
         })
         agents.write_text(_replace_block(agents.read_text(encoding="utf-8"), block), encoding="utf-8")
     print(f"[projstate] refresh 完成：{len(files)} 候选，{len(findings)} 组旧版判定")
@@ -138,6 +141,13 @@ def cmd_refresh(root: Path) -> int:
         print(f"[projstate] ⚠️ {len(stale_lines)} 条结论的依赖已变更，已在 STATE.md 标出，需复核：")
         for ln in stale_lines:
             print(f"  {ln}")
+    if stale_docs:
+        print(f"[projstate] ⚠️ {len(stale_docs)} 份文档的引用已失效，需复核：")
+        for d in stale_docs[:10]:
+            print(f"  {d['doc']}  ← {'、'.join(d['deps'])}")
+        if len(stale_docs) > 10:
+            print(f"  …另有 {len(stale_docs) - 10} 份，完整清单见 .ai/HIP.md")
+        print("[projstate]   看过并接受：`projstate ack <文档路径>`（此后下一次变更才会再报）")
     return 0
 
 
@@ -203,7 +213,36 @@ def cmd_check(root: Path) -> int:
         for f in flagged:
             print(f"  {f}")
         dirty = True
+    # 文档层：AGENTS.md / README.md / docs 里断言的依赖
+    docs = statedeps.pending_docs(root)
+    if docs:
+        print(f"[projstate] ⚠️ {len(docs)} 份文档的引用已失效，需复核：")
+        for d in docs[:10]:
+            print(f"  {d['doc']}  ← {'、'.join(d['deps'])}")
+        if len(docs) > 10:
+            print(f"  …另有 {len(docs) - 10} 份，见 .ai/HIP.md")
+        print("[projstate]   看过并接受：`projstate ack <文档路径>`")
+        dirty = True
     return 1 if dirty else 0
+
+
+def cmd_ack(root: Path, path: str | None) -> int:
+    """把文档依赖基线重置为当前状态——"这次变更我看过了"。
+
+    噪声抑制：活跃开发中，被引用的文件每次改动都会把文档标红；没有这条出路，
+    清单会迅速退化成狼来了。ack 后要等**下一次**变更才会重新报警。
+    """
+    from projstate import statedeps
+
+    rel = path.replace("\\", "/") if path else None
+    if rel is not None:
+        known = set(statedeps.load(root).get("docs") or {})
+        if rel not in known:
+            print(f"[projstate] {rel} 不在已锚定的文档清单中，无需 ack", file=sys.stderr)
+            return 1
+    n = statedeps.ack_docs(root, rel)
+    print(f"[projstate] 已重置 {n} 份文档的依赖基线；下次它们引用的文件再变更时会重新报警")
+    return 0
 
 
 def cmd_explain(root: Path, path: str) -> int:
@@ -424,6 +463,7 @@ def main(argv: list[str] | None = None) -> int:
     p_ca = sub.add_parser("canonical"); p_ca.add_argument("name")
     p_wy = sub.add_parser("why"); p_wy.add_argument("path")
     p_re = sub.add_parser("resolve"); p_re.add_argument("path")
+    p_ack = sub.add_parser("ack"); p_ack.add_argument("path", nargs="?")
     sub.add_parser("init")
     sub.add_parser("archive")
     sub.add_parser("restore")
@@ -452,6 +492,8 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_why(root, args.path)
     if cmd == "resolve":
         return cmd_resolve(root, args.path)
+    if cmd == "ack":
+        return cmd_ack(root, args.path)
     if cmd == "selftest":
         return cmd_selftest()
     if cmd == "init":

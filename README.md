@@ -11,6 +11,7 @@
 | 重开窗口/换 agent 重读全仓 | `.ai/STATE.md` | `projstate log "完成X，下一步Y"`；换窗口 `projstate status` |
 | 精读漏重点、反复读漂移 | `.ai/MAP.md` | 开工读"入口/关键文件/改X读什么" |
 | 旧文件当现行版 | `.ai/HIP.md` | 读"现行版对照+勿读清单" |
+| 旧文档的断言当现状（含 AGENTS.md / docs） | `.ai/HIP.md`「文档引用已失效」 | 依赖快照自动标出；看过用 `projstate ack <文档>` |
 
 ## 命令
 
@@ -25,6 +26,7 @@
 | `projstate canonical <名>` | 该概念现行版是哪个 |
 | `projstate why <path>` | 为什么判它陈旧 |
 | `projstate resolve <候选>` | 人为确认某候选为现行版，写入 `.ai/canonical_overrides.json`，永久生效 |
+| `projstate ack [文档]` | 接受某文档当前的依赖状态（省略路径 = 全部），此后下一次变更才会再报 |
 | `projstate task <名>` | 设置 `STATE.md` 的当前任务（与 log 的下一步分开） |
 
 ## 已知限制
@@ -59,6 +61,16 @@
   引用的文件内容**（`.ai/state_deps.json`）：这些文件一变更，该结论就在 `STATE.md` 里被就地
   标上 `⚠️ 依赖已变更：<path>`，并在 `refresh` / `check` / AGENTS.md 标记块中重复告警。
   标记是双向且幂等的——文件改回原样则标记自动消失，不会堆叠。
+- **文档层同样被覆盖**：`AGENTS.md` / `CLAUDE.md` / `GEMINI.md` / `README.md` 与所有
+  markdown 文档里对真实文件的引用，都被锚定。实测 hermes-agent：554 份文档、1256 处引用。
+  变更后列进 `HIP.md` 的「文档引用已失效」。这是痛点三之外的另一条真实失效路径——
+  存量文档的断言会静默过期，而 agent 正是自动读它们。
+- **根级规则文件只哈希标记块之外的内容**：标记块由本工具改写，整文件哈希会形成
+  自指循环（refresh 改写 → 引用它的文档全部失效 → ack → 下次 refresh 又改 → 再失效）。
+  实测该循环在 hermes-agent 上会一次牵动 54 份文档，故必须排除。
+- **ack 是噪声抑制的必需品，不是可选项**：活跃开发中，被引用的文件每次改动都会把文档标红。
+  没有 `projstate ack` 这条出路，清单会迅速退化成狼来了——机制会把自己废掉。
+  ack 记录留痕（`上次接受于 <日期>`），且已失效的文档**不会因为再跑一次 refresh 而自愈**。
 
 ## 依赖与许可
 
