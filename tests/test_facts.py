@@ -54,6 +54,41 @@ def test_build_map_resolves_python_absolute_import(tmp_path: Path):
     assert m["app/payment.py"]["ref_count"] == 0
 
 
+def test_build_map_counts_submodule_import(tmp_path: Path):
+    """`from agent import curator_backup` 这类**子模块导入**必须计入被引数。
+
+    实证：只记 node.module 时该导入退化成 "agent"，curator_backup.py 的
+    ref_count=0，于是 711 行、被 6 个文件提及的活代码被旧版规则判
+    「已作废，建议归档」。子模块候选是专为计数开的通道。
+    """
+    (tmp_path / "agent").mkdir()
+    (tmp_path / "agent" / "__init__.py").write_text("", encoding="utf-8")
+    (tmp_path / "agent" / "curator.py").write_text(
+        "from agent import curator_backup\n", encoding="utf-8"
+    )
+    (tmp_path / "agent" / "curator_backup.py").write_text(
+        "def snapshot():\n    return 1\n", encoding="utf-8"
+    )
+    m = build_map(tmp_path, [
+        tmp_path / "agent" / "__init__.py",
+        tmp_path / "agent" / "curator.py",
+        tmp_path / "agent" / "curator_backup.py",
+    ])
+    assert m["agent/curator_backup.py"]["ref_count"] == 1
+
+
+def test_submodule_specs_do_not_leak_into_unresolved(tmp_path: Path):
+    """子模块候选不得泄漏进 unresolved。
+
+    否则每条 `from .x import y` 都会多报一条 ".x.y"，把 unresolved.json
+    变成噪声清单——这正是它没被并入 extract_imports 的原因。
+    """
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "a.py").write_text("from .missing import x\n", encoding="utf-8")
+    unresolved = find_unresolved(tmp_path, [tmp_path / "src" / "a.py"])
+    assert unresolved["src/a.py"] == [".missing"]
+
+
 def test_find_unresolved_records_broken_relative_import(tmp_path: Path):
     """相对导入指向不存在的文件，须记入 unresolved 而非静默丢弃。"""
     (tmp_path / "src").mkdir()

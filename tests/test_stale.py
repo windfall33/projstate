@@ -82,10 +82,14 @@ def test_elect_does_not_decide_by_ref_count():
 
 
 def test_elect_explicit_old_marker_beats_higher_ref_count():
-    """自声明旧版的文件即使被引用更多，也不得成为现行版。
+    """自声明旧版的文件即使被引用更多，也绝不得成为现行版。
 
     这是 P0 改造前的一个真实反向误判：`a_old.py` 引用 5 次、`a.py` 引用 0 次时，
     旧实现让 `a_old.py` 当上现行版，并建议归档 `a.py`。
+
+    否决闸门加入后，结论更强：不再定论**任何一方**，整组转 ambiguous。
+    `a_old.py` 依然当不上现行版（原意图未被削弱），但也不会被贴「勿读」标签——
+    它仍被 5 处引用，此时「勿读」正是误杀。
     """
     from projstate.stale import elect
 
@@ -94,21 +98,44 @@ def test_elect_explicit_old_marker_beats_higher_ref_count():
         "app/a_old.py": {"ref_count": 5, "reachable": False, "mtime": 2000, "language": "python"},
     }
     findings = elect([["app/a.py", "app/a_old.py"]], facts, set())
-    assert findings[0].canonical == "app/a.py"
-    assert findings[0].superseded == ("app/a_old.py",)
+    assert findings[0].canonical is None
+    assert findings[0].superseded == ()
+    assert "app/a_old.py" in findings[0].ambiguous
 
 
 def test_elect_still_decides_when_old_marker_present():
-    """保留能力：明确旧版标记仍可定论，不需要人工登记。"""
+    """保留能力：带旧版标记且**无人引用**时仍可定论，不需要人工登记。
+
+    这是迁移窗口之外最常见的情形——一份没人再引用的 `_old` 残留。
+    """
     from projstate.stale import elect
 
     facts = {
-        "svc/auth.py": {"ref_count": 0, "reachable": False, "mtime": 1000, "language": "python"},
-        "svc/auth_old.py": {"ref_count": 3, "reachable": False, "mtime": 2000, "language": "python"},
+        "svc/auth.py": {"ref_count": 2, "reachable": False, "mtime": 1000, "language": "python"},
+        "svc/auth_old.py": {"ref_count": 0, "reachable": False, "mtime": 2000, "language": "python"},
     }
     findings = elect([["svc/auth.py", "svc/auth_old.py"]], facts, set())
     assert findings[0].canonical == "svc/auth.py"
     assert findings[0].superseded == ("svc/auth_old.py",)
+
+
+def test_elect_veto_only_costs_a_resolve_on_migration_window():
+    """否决闸门的已知代价，显式记录。
+
+    迁移进行中（新文件刚落地、调用方尚未切完）时，旧文件仍被大量引用，
+    本可确定"它就是旧版"，现在会转成 ambiguous，需要一次 `projstate resolve`。
+    这是刻意换来的：`resolve` 一次写入永久生效，而误杀活代码每次都会误导 agent。
+    """
+    from projstate.stale import elect, StaleFinding
+
+    facts = {
+        "db/migrate.py": {"ref_count": 0, "reachable": False, "mtime": 1000, "language": "python"},
+        "db/migrate_old.py": {"ref_count": 12, "reachable": False, "mtime": 2000, "language": "python"},
+    }
+    findings = elect([["db/migrate.py", "db/migrate_old.py"]], facts, set())
+    assert isinstance(findings[0], StaleFinding)
+    assert findings[0].canonical is None
+    assert "resolve" in findings[0].suggestion
 
 
 def test_elect_all_marked_is_ambiguous():
@@ -127,6 +154,12 @@ def test_group_candidates_never_groups_test_files():
     assert group_candidates(["src/handler.py", "src/handler_test.py"]) == []
     assert group_candidates(["src/app.js", "src/app.spec.js"]) == []
     assert group_candidates(["src/test_utils.py", "src/utils.py"]) == []
+    # `test_` 前缀须锚在文件名上：锚到整条相对路径会让 tests/ 布局（Python 最常见）
+    # 全部漏网，于是两个测试文件被归为同组、其一被判「建议归档」——
+    # 正是本闸门要防的「把行为契约误报成废弃实现」。实证 hermes-agent。
+    assert group_candidates(["tests/agent/test_curator.py", "tests/agent/test_curator_backup.py"]) == []
+    assert group_candidates(["tests/hermes_cli/test_backup.py", "tests/hermes_cli/test_backup_old.py"]) == []
+    assert group_candidates(["agent/tests/test_curator.py", "agent/tests/test_curator_old.py"]) == []
     # 对照：真实的版本关系仍然归组
     assert group_candidates(["src/report.py", "src/report_old.py"]) != []
 

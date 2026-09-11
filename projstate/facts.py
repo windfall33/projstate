@@ -48,34 +48,43 @@ def _extract_js_imports(text: str) -> tuple[str, ...]:
     return tuple(dict.fromkeys(result))
 
 
-def _extract_py_imports(text: str) -> tuple[str, ...]:
-    """Python 导入：用 ast 解析，能同时识别绝对导入与相对导入。"""
+def _py_specs(text: str) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """Python 导入 → (基础说明符, 子模块候选说明符)。
+
+    子模块候选专供 ref_count。`from pkg import submodule` 中被导入的名字可能是
+    **子模块**，只记 node.module 会整个漏掉它：实证 hermes-agent 的
+    `from agent import curator_backup` 因此让 curator_backup.py 的 ref_count=0，
+    711 行、被 6 个文件提及的活代码被判「已作废，建议归档」。
+
+    刻意不并入 extract_imports：被导入的名字也可能只是函数/常量，混进去会让
+    find_unresolved 把不存在的子模块名报成「未解析导入」制造噪声
+    （实测：`from .missing import x` 会多出一条 ".missing.x"）。
+    """
     import ast
 
     try:
         tree = ast.parse(text)
     except SyntaxError:
-        return ()
-    imports: list[str] = []
+        return (), ()
+    base: list[str] = []
+    sub: list[str] = []
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             for alias in node.names:
-                imports.append(alias.name)
+                base.append(alias.name)
         elif isinstance(node, ast.ImportFrom):
-            prefix = "." * node.level
-            if node.level:  # 相对导入：from .xxx / from ..xxx
-                imports.append(prefix + (node.module or ""))
-            else:
-                imports.append(node.module or "")
-            # `from pkg import submodule` 中被导入的名字可能是**子模块**，只记 node.module
-            # 会把它整个漏掉。实证：hermes-agent 的 `from agent import curator_backup`
-            # 因此让 curator_backup.py 的 ref_count=0，711 行、被 6 个文件提及的活代码
-            # 被旧版规则判为「已作废，建议归档」。
-            # 追加 module.name 形式；解析不到的（函数名、常量）自然落空，不影响既有判定。
-            base = prefix + (node.module + "." if node.module else "")
+            level_prefix = "." * node.level
+            base.append(level_prefix + (node.module or ""))
+            head = level_prefix + (node.module + "." if node.module else "")
             for alias in node.names:
-                imports.append(f"{base}{alias.name}")
-    return tuple(dict.fromkeys(imports))
+                if alias.name != "*":
+                    sub.append(f"{head}{alias.name}")
+    return tuple(dict.fromkeys(base)), tuple(dict.fromkeys(sub))
+
+
+def _extract_py_imports(text: str) -> tuple[str, ...]:
+    """Python 导入：用 ast 解析，能同时识别绝对导入与相对导入。"""
+    return _py_specs(text)[0]
 
 
 def entry_points(root: Path, rel: str, language: str) -> bool:
@@ -116,6 +125,9 @@ def build_map(root: Path, files: list[Path]) -> dict:
     result: dict[str, dict] = {}
     module_index: dict[str, list[str]] = {}
 
+    # 子模块候选（仅用于计数，不进 map.json——见 _py_specs）
+    sub_by_rel: dict[str, tuple[str, ...]] = {}
+
     for path in files:
         rel = rel_posix(root, path)
         try:
@@ -123,7 +135,11 @@ def build_map(root: Path, files: list[Path]) -> dict:
         except OSError:
             source = b""
         lang = detect_language(rel)
-        imports = extract_imports(source, lang)
+        if lang == "python":
+            imports, sub_specs = _py_specs(source.decode("utf-8", "replace"))
+        else:
+            imports, sub_specs = extract_imports(source, lang), ()
+        sub_by_rel[rel] = sub_specs
         # 建立模块路径索引（去扩展名，POSIX）
         module_index.setdefault(_module_stem(rel), []).append(rel)
         result[rel] = {
@@ -136,7 +152,7 @@ def build_map(root: Path, files: list[Path]) -> dict:
 
     resolver = _build_resolver(root, module_index)
     for rel, entry in result.items():
-        for imp in entry["imports"]:
+        for imp in (*entry["imports"], *sub_by_rel.get(rel, ())):
             target = resolver.resolve(imp, rel)
             if target and target in result:
                 result[target]["ref_count"] += 1
